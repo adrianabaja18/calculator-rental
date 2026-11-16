@@ -26,6 +26,9 @@ as $$
 $$;
 grant execute on function auth.uid() to anon, authenticated, service_role;
 
+-- Supabase Realtime's publication (exists, empty, in every project).
+create publication supabase_realtime;
+
 -- Supabase grants table privileges to its API roles by default.
 alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
 alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;

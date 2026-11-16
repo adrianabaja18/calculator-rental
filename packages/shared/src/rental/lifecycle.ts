@@ -67,3 +67,18 @@ export function overdueMinutes(dueAt: Date | string | null, now: Date): number {
   if (!dueAt || !isOverdue(dueAt, now)) return 0;
   return Math.floor((now.getTime() - new Date(dueAt).getTime()) / 60_000);
 }
+
+/**
+ * Countdown shown on the Active Rentals page (spec §25), computed on the
+ * client from due_at every second; nothing is written to the database.
+ *   { overdue: false, text: '01:42:15' }  → "Due in 01:42:15"
+ *   { overdue: true,  text: '00:32:16' }  → "Overdue by 00:32:16"
+ * Hours can exceed 24 (e.g. '26:05:00').
+ */
+export function rentalCountdown(dueAt: Date | string, now: Date): { overdue: boolean; text: string } {
+  const diffMs = new Date(dueAt).getTime() - now.getTime();
+  const total = Math.floor(Math.abs(diffMs) / 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const text = `${pad(Math.floor(total / 3600))}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
+  return { overdue: diffMs < 0, text };
+}

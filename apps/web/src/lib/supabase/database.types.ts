@@ -1135,6 +1135,19 @@ export type Database = {
           },
         ]
       }
+      v_dashboard_summary: {
+        Row: {
+          available_calculators: number | null
+          income_today: number | null
+          outstanding_penalties: number | null
+          overdue_rentals: number | null
+          rentals_today: number | null
+          rented_calculators: number | null
+          returns_today: number | null
+          total_calculators: number | null
+        }
+        Relationships: []
+      }
       v_device_status: {
         Row: {
           connection_status: string | null
