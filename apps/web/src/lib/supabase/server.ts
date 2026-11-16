@@ -2,20 +2,20 @@ import 'server-only';
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { getPublicEnv } from '@/lib/env';
+import type { Database } from '@/lib/supabase/database.types';
 
 /**
  * Supabase client for SERVER COMPONENTS, SERVER ACTIONS and ROUTE HANDLERS
  * acting ON BEHALF OF THE LOGGED-IN ADMIN.
  *
  * It reads the admin's auth session from cookies, so Row Level Security
- * still applies with that admin's identity. Use this for anything an
- * officer does from the dashboard.
+ * still applies with that admin's identity.
  */
 export async function createSupabaseServerClient() {
   const env = getPublicEnv();
   const cookieStore = await cookies();
 
-  return createServerClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
+  return createServerClient<Database>(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
@@ -27,7 +27,7 @@ export async function createSupabaseServerClient() {
           }
         } catch {
           // Called from a Server Component, where cookies are read-only.
-          // Safe to ignore: the session-refresh proxy (Phase 3) writes them.
+          // Safe to ignore: src/proxy.ts refreshes the session cookies.
         }
       },
     },

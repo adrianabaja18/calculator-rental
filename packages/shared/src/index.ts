@@ -10,3 +10,4 @@ export * from './time';
 export * from './enums';
 export * from './validation';
 export * from './qr';
+export * from './roles';
