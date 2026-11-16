@@ -78,13 +78,30 @@ export interface PaymentRecord {
   received_centavos: number;
   status: 'PENDING' | 'PARTIAL' | 'PAID' | 'CANCELLED' | 'REFUNDED';
   session_id: string;
+  penalty_id: string | null;
+  expires_at: string | null;
   paid_at: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export type SyncEntity = 'student' | 'rental' | 'device_event' | 'coin_event' | 'payment' | 'locker_state';
+export interface PenaltyRecord {
+  id: string;
+  rental_id: string | null;
+  student_id: string;
+  reason: 'OVERDUE' | 'DAMAGE' | 'LOST' | 'OTHER';
+  overdue_minutes: number;
+  calculated_centavos: number;
+  amount_paid_centavos: number;
+  /** Remaining balance (calculated − paid). */
+  amount_due_centavos: number;
+  status: 'UNPAID' | 'PARTIAL' | 'PAID' | 'WAIVED';
+  paid_at: string | null;
+  updated_at: string;
+}
+
+export type SyncEntity = 'student' | 'rental' | 'device_event' | 'coin_event' | 'payment' | 'locker_state' | 'penalty';
 
 const OPEN_LIST = OPEN_RENTAL_STATUSES.map((s) => `'${s}'`).join(', ');
 
@@ -296,8 +313,8 @@ export class KioskStore {
   insertPayment(payment: Omit<PaymentRecord, 'paid_at' | 'notes'>): PaymentRecord {
     this.db
       .prepare(
-        `INSERT INTO payments (id, rental_id, student_id, payment_type, method, required_centavos, received_centavos, status, session_id, created_at, updated_at)
-         VALUES (@id, @rental_id, @student_id, @payment_type, @method, @required_centavos, @received_centavos, @status, @session_id, @created_at, @updated_at)`,
+        `INSERT INTO payments (id, rental_id, student_id, payment_type, method, required_centavos, received_centavos, status, session_id, penalty_id, expires_at, created_at, updated_at)
+         VALUES (@id, @rental_id, @student_id, @payment_type, @method, @required_centavos, @received_centavos, @status, @session_id, @penalty_id, @expires_at, @created_at, @updated_at)`,
       )
       .run(payment);
     const saved = this.getPaymentBySession(payment.session_id)!;
@@ -336,14 +353,92 @@ export class KioskStore {
     return inserted;
   }
 
-  /** Open payment sessions whose rental's payment window has passed. */
+  /** Open payment sessions (rental or penalty) whose window has passed. */
   listExpiredPaymentSessions(nowIso: string): PaymentRecord[] {
     return this.db
-      .prepare(
-        `SELECT p.* FROM payments p JOIN rentals r ON r.id = p.rental_id
-         WHERE p.status IN ('PENDING', 'PARTIAL') AND r.status = 'PAYMENT_PENDING' AND r.payment_expires_at < ?`,
-      )
+      .prepare(`SELECT * FROM payments WHERE status IN ('PENDING', 'PARTIAL') AND expires_at < ?`)
       .all(nowIso) as PaymentRecord[];
+  }
+
+  getOpenPaymentForPenalty(penaltyId: string): PaymentRecord | null {
+    return (
+      (this.db
+        .prepare(`SELECT * FROM payments WHERE penalty_id = ? AND status IN ('PENDING', 'PARTIAL')`)
+        .get(penaltyId) as PaymentRecord) ?? null
+    );
+  }
+
+  // ---------------------------------------------------------------- returns & penalties
+  /** The rental a student still has to return (calculator is out). */
+  getOutstandingRentalForStudent(studentId: string): RentalRecord | null {
+    return (
+      (this.db
+        .prepare(`SELECT * FROM rentals WHERE student_id = ? AND status IN ('ACTIVE', 'OVERDUE', 'RETURNING')`)
+        .get(studentId) as RentalRecord) ?? null
+    );
+  }
+
+  listActiveRentalsPastDue(nowIso: string): RentalRecord[] {
+    return this.db.prepare(`SELECT * FROM rentals WHERE status = 'ACTIVE' AND due_at < ?`).all(nowIso) as RentalRecord[];
+  }
+
+  getOverduePenalty(rentalId: string): PenaltyRecord | null {
+    return (
+      (this.db.prepare(`SELECT * FROM penalties WHERE rental_id = ? AND reason = 'OVERDUE'`).get(rentalId) as PenaltyRecord) ?? null
+    );
+  }
+
+  private savePenalty(penalty: PenaltyRecord): PenaltyRecord {
+    const due = Math.max(0, penalty.calculated_centavos - penalty.amount_paid_centavos);
+    const status = due === 0 ? 'PAID' : penalty.amount_paid_centavos > 0 ? 'PARTIAL' : 'UNPAID';
+    const row = { ...penalty, amount_due_centavos: due, status, paid_at: due === 0 ? (penalty.paid_at ?? penalty.updated_at) : null };
+    this.db
+      .prepare(
+        `INSERT INTO penalties (id, rental_id, student_id, reason, overdue_minutes, calculated_centavos, amount_paid_centavos, amount_due_centavos, status, paid_at, updated_at)
+         VALUES (@id, @rental_id, @student_id, @reason, @overdue_minutes, @calculated_centavos, @amount_paid_centavos, @amount_due_centavos, @status, @paid_at, @updated_at)
+         ON CONFLICT(id) DO UPDATE SET overdue_minutes = excluded.overdue_minutes, calculated_centavos = excluded.calculated_centavos,
+           amount_paid_centavos = excluded.amount_paid_centavos, amount_due_centavos = excluded.amount_due_centavos,
+           status = excluded.status, paid_at = excluded.paid_at, updated_at = excluded.updated_at`,
+      )
+      .run(row);
+    this.enqueue('penalty', row.id, row);
+    return row as PenaltyRecord;
+  }
+
+  /**
+   * Creates or raises the overdue penalty of a rental to `calculatedCentavos`
+   * (it only ever grows; what was already paid is kept).
+   */
+  quoteOverduePenalty(
+    rental: { id: string; student_id: string },
+    quote: { overdueMinutes: number; calculatedCentavos: number },
+    newId: string,
+    nowIso: string,
+  ): PenaltyRecord {
+    const existing = this.getOverduePenalty(rental.id);
+    return this.savePenalty({
+      id: existing?.id ?? newId,
+      rental_id: rental.id,
+      student_id: rental.student_id,
+      reason: 'OVERDUE',
+      overdue_minutes: Math.max(existing?.overdue_minutes ?? 0, quote.overdueMinutes),
+      calculated_centavos: Math.max(existing?.calculated_centavos ?? 0, quote.calculatedCentavos),
+      amount_paid_centavos: existing?.amount_paid_centavos ?? 0,
+      amount_due_centavos: 0,
+      status: 'UNPAID',
+      paid_at: existing?.paid_at ?? null,
+      updated_at: nowIso,
+    });
+  }
+
+  /** Credits coins to a penalty (never beyond what is owed; overpayment stays on the payment). */
+  applyPenaltyPayment(penaltyId: string, centavos: number, nowIso: string): PenaltyRecord {
+    const penalty = this.db.prepare('SELECT * FROM penalties WHERE id = ?').get(penaltyId) as PenaltyRecord;
+    return this.savePenalty({
+      ...penalty,
+      amount_paid_centavos: Math.min(penalty.calculated_centavos, penalty.amount_paid_centavos + centavos),
+      updated_at: nowIso,
+    });
   }
 
   // ---------------------------------------------------------------- events & outbox

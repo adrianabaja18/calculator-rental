@@ -210,4 +210,42 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX coin_events_payment_idx ON coin_events (payment_id);
     `,
   },
+  {
+    version: 4,
+    name: 'returns_and_penalties',
+    sql: `
+      -- Full penalty record (mirrors Supabase penalties). amount_due_centavos
+      -- stays the remaining balance used by the eligibility check.
+      ALTER TABLE penalties ADD COLUMN reason TEXT NOT NULL DEFAULT 'OVERDUE'
+        CHECK (reason IN ('OVERDUE', 'DAMAGE', 'LOST', 'OTHER'));
+      ALTER TABLE penalties ADD COLUMN overdue_minutes INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE penalties ADD COLUMN calculated_centavos INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE penalties ADD COLUMN amount_paid_centavos INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE penalties ADD COLUMN paid_at TEXT;
+      CREATE UNIQUE INDEX penalties_one_overdue_per_rental ON penalties (rental_id) WHERE reason = 'OVERDUE';
+
+      -- Penalty payments point at their penalty; every session has its own expiry.
+      ALTER TABLE payments ADD COLUMN penalty_id TEXT REFERENCES penalties (id);
+      ALTER TABLE payments ADD COLUMN expires_at TEXT;
+      UPDATE payments SET expires_at = (SELECT r.payment_expires_at FROM rentals r WHERE r.id = payments.rental_id)
+        WHERE expires_at IS NULL;
+
+      -- Allow 'penalty' in the outbox (SQLite can't alter a CHECK: rebuild, keeping rows).
+      CREATE TABLE sync_queue_new (
+        seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity          TEXT NOT NULL CHECK (entity IN ('student', 'rental', 'device_event', 'coin_event', 'payment', 'locker_state', 'penalty')),
+        entity_id       TEXT NOT NULL,
+        payload         TEXT NOT NULL CHECK (json_valid(payload)),
+        created_at      TEXT NOT NULL DEFAULT ${SQL_UTC_NOW},
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        last_error      TEXT,
+        next_attempt_at TEXT,
+        synced_at       TEXT
+      ) STRICT;
+      INSERT INTO sync_queue_new SELECT * FROM sync_queue;
+      DROP TABLE sync_queue;
+      ALTER TABLE sync_queue_new RENAME TO sync_queue;
+      CREATE INDEX sync_queue_pending_idx ON sync_queue (seq) WHERE synced_at IS NULL;
+    `,
+  },
 ];

@@ -15,9 +15,12 @@ import type { RentalService, ServiceResult } from '../rental/rental-service';
 /**
  * Coin payment sessions (spec §5 steps 17–24), SQLite-first.
  *
- *  openSession(rentalId)   rental is PAYMENT_PENDING → payment PENDING (coin acceptor enabled)
- *  insertCoin(coin)        adds a coin → PARTIAL … PAID, then markPaid() on the rental
- *  expireSessions()        payment window passed → payment + rental CANCELLED
+ *  openSession(rentalId)          rental is PAYMENT_PENDING → RENTAL payment PENDING (coin acceptor enabled)
+ *  openPenaltySession(penaltyId)  late return (pay-first policy) → PENALTY payment for the balance
+ *  insertCoin(coin)               adds a coin → PARTIAL … PAID, then marks the rental PAID
+ *                                 or credits the penalty, in the same transaction
+ *  expireSessions()               window passed → RENTAL: payment + rental CANCELLED;
+ *                                 PENALTY: coins so far are credited to the penalty
  *
  * Coin rules:
  *  - each coin event has its own id → the same pulses are never counted twice;
@@ -73,6 +76,41 @@ export class PaymentService {
       received_centavos: 0,
       status: PaymentStatus.PENDING,
       session_id: randomUUID(),
+      penalty_id: null,
+      expires_at: rental.payment_expires_at,
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+    return { ok: true, sessionId: payment.session_id, progress: paymentProgress(payment.required_centavos, 0) };
+  }
+
+  /** Opens (or returns the open) coin session for a penalty's remaining balance. */
+  openPenaltySession(penaltyId: string): ServiceResult<{ sessionId: string; progress: PaymentProgress }> {
+    const penalty = this.store.db.prepare('SELECT * FROM penalties WHERE id = ?').get(penaltyId) as
+      | { id: string; rental_id: string; student_id: string; amount_due_centavos: number }
+      | undefined;
+    if (!penalty || penalty.amount_due_centavos <= 0) {
+      return fail(ErrorCode.PAYMENT_INCOMPLETE, 'Nothing is owed on this penalty.');
+    }
+    const existing = this.store.getOpenPaymentForPenalty(penaltyId);
+    if (existing) {
+      return { ok: true, sessionId: existing.session_id, progress: paymentProgress(existing.required_centavos, existing.received_centavos) };
+    }
+    const now = this.now();
+    const nowIso = now.toISOString();
+    const timeoutSeconds = this.store.getSettings()?.paymentTimeoutSeconds ?? 120;
+    const payment = this.store.insertPayment({
+      id: randomUUID(),
+      rental_id: penalty.rental_id,
+      student_id: penalty.student_id,
+      payment_type: 'PENALTY',
+      method: 'COIN',
+      required_centavos: penalty.amount_due_centavos,
+      received_centavos: 0,
+      status: PaymentStatus.PENDING,
+      session_id: randomUUID(),
+      penalty_id: penalty.id,
+      expires_at: new Date(now.getTime() + timeoutSeconds * 1000).toISOString(),
       created_at: nowIso,
       updated_at: nowIso,
     });
@@ -152,8 +190,12 @@ export class PaymentService {
       });
 
       if (progress.complete) {
-        const paid = this.rentals.markPaid(payment.rental_id, received);
-        if (!paid.ok) throw new Error(`Payment complete but rental could not be marked paid: ${paid.message}`);
+        if (payment.payment_type === 'PENALTY' && payment.penalty_id) {
+          this.store.applyPenaltyPayment(payment.penalty_id, received, nowIso);
+        } else {
+          const paid = this.rentals.markPaid(payment.rental_id, received);
+          if (!paid.ok) throw new Error(`Payment complete but rental could not be marked paid: ${paid.message}`);
+        }
         this.store.recordEvent({
           type: EventType.PAYMENT_COMPLETE,
           severity: EventSeverity.INFO,
@@ -178,6 +220,21 @@ export class PaymentService {
     for (const payment of this.store.listExpiredPaymentSessions(nowIso)) {
       this.store.transaction(() => {
         if (!this.store.updatePayment(payment.id, payment.status, { status: PaymentStatus.CANCELLED, updated_at: nowIso })) return;
+        expired += 1;
+        if (payment.payment_type === 'PENALTY' && payment.penalty_id) {
+          // The student owes this money anyway: keep the coins as part-payment, no refund.
+          if (payment.received_centavos > 0) this.store.applyPenaltyPayment(payment.penalty_id, payment.received_centavos, nowIso);
+          // Pay-first policy: the calculator is still out. Officers should follow up.
+          this.store.recordEvent({
+            type: EventType.PAYMENT_TIMEOUT,
+            severity: EventSeverity.WARNING,
+            message: `Late return not completed: penalty not fully paid (₱${payment.received_centavos / 100} of ₱${payment.required_centavos / 100}), calculator still with the student`,
+            transactionId: payment.rental_id,
+            payload: { paymentId: payment.id, penaltyId: payment.penalty_id, receivedCentavos: payment.received_centavos },
+            occurredAt: nowIso,
+          });
+          return;
+        }
         this.rentals.cancelRental(payment.rental_id, 'PAYMENT_TIMEOUT');
         if (payment.received_centavos > 0) {
           this.store.recordEvent({
@@ -189,7 +246,6 @@ export class PaymentService {
             occurredAt: nowIso,
           });
         }
-        expired += 1;
       });
     }
     return { expired };

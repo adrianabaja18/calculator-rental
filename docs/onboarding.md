@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-17, end of **Phase 6** (coin payment sessions)
+> **Last updated:** 2026-11-18, end of **Phase 7** (returns, RFID verification, penalties)
 
 ---
 
@@ -12,7 +12,7 @@ A kiosk lends scientific calculators to students:
 
 1. A student scans their **school ID QR code** (ESP32-CAM).
 2. The **Raspberry Pi 4** checks with the backend that they may borrow.
-3. They pay **₱5 in coins** (Allan 1239 coin selector).
+3. They pay **₱20 in coins** (Allan 1239 coin selector).
 4. The Pi unlocks a **12 V solenoid locker** and an **RC522 RFID reader** confirms the calculator was taken.
 5. To return, they scan again. Only their locker opens, and RFID verifies it's the *right* calculator.
 
@@ -41,9 +41,9 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 3 | Admin authentication, dashboard shell, navigation | ✅ Done and verified |
 | 4 | Students, calculators and lockers pages (admin data lives in Supabase) | ✅ Done and verified |
 | 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ✅ Done and verified |
-| 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ✅ Built and tested. ⏳ Checklist pending (§6). |
-| 7 | Return rules, RFID verification, penalty engine (shared logic) | ⬜ Next |
-| 8 | Realtime dashboard | ⬜ |
+| 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ✅ Done and verified |
+| 7 | Return rules, RFID verification, penalty engine, Settings page | ✅ Built and tested. ⏳ Checklist pending (§6). |
+| 8 | Realtime dashboard | ⬜ Next |
 | 9 | Raspberry Pi service: state machine, adapters, device auth | ⬜ |
 | 10 | ESP32-CAM QR firmware + serial link | ⬜ |
 | 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer | ⬜ |
@@ -68,7 +68,7 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 4 | Add **2 reed switches** (door sensors)? | Phase 11 | Recommended, not decided |
 | 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 (update seed/inventory) | Not collected yet |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
-| — | Pricing and after-hours rule | — | ✅ Decided 2026-11-17 (may change): **₱20 for 3 hours, then ₱20 per hour overdue**, and overdue time **keeps counting overnight** while the kiosk is off. Applied in migration `20261117000100`; the 10-minute grace period is kept. Still to settle in Phase 7: does a started hour count as a full hour (1 h 5 min late = ₱40, or ₱20)? |
+| — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, keeps counting overnight, **paid before the return locker opens** (2026-11-18). Editable on the Settings page. |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
 | — | School ID QR format | — | ✅ `FULL NAME<TAB>10-digit student number<TAB>COURSE` |
 
@@ -118,7 +118,7 @@ The Pi `.env` defaults work on a laptop.
 | Command | Expected result |
 |---|---|
 | `npm run typecheck` | No errors |
-| `npm test` | All tests pass (198 at the end of Phase 6) |
+| `npm test` | All tests pass (240 at the end of Phase 7) |
 | `npm run dev:web`, then open http://localhost:3000 | Redirects to the login page. After signing in, the Dashboard's system check cards are green. |
 | `npm run check:pi` (second terminal, web running) | `SYSTEM CHECK PASSED` |
 
@@ -158,7 +158,66 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 6 hand-off: coin payment sessions
+## 6. Phase 7 hand-off: returns, RFID verification, penalties
+
+Delivered as **two PRs**:
+- **7a** `phase-7a/penalty-rules-settings`: shared penalty and return rules, the Supabase policy migration, and the Settings page
+- **7b** `phase-7b/kiosk-returns`: the kiosk's return flow
+
+### Team policy (decided 2026-11-18, editable in Settings)
+| Rule | Value |
+|---|---|
+| Rental | ₱20 for 3 hours. It is **never charged again on return.** |
+| Overdue penalty | **₱10 for every started 1.5 hours late.** Examples: 1 h late → ₱10 · 2 h → ₱20 · 3 h → ₱20 · 4 h → ₱30 |
+| Grace period | 10 minutes late is free. After that, lateness counts from the due time. |
+| Overnight | Keeps counting while the kiosk is off |
+| When to pay | **Before the return locker opens** (pay-first). See the risk note below. |
+
+### Built
+- **Shared rules** (`packages/shared/src/rental/penalty.ts`):
+  - `calculatePenalty` supports FLAT, PER_INTERVAL and STEPPED penalties, with the grace period and a maximum cap.
+  - `verifyReturnedCalculator` passes only when the expected RFID tag is in the locker and, if a door sensor exists, the door is closed. It rejects the wrong calculator (Rule 10) and an empty locker or random object (Rule 9).
+- **Settings page** (`/settings`):
+  - Every admin can view it. **Only a Super Admin can save.**
+  - Validated with the same rules the kiosk uses, and every change is audit-logged with old and new values.
+  - A **live preview table** shows what a late return will cost.
+- **Kiosk SQLite migration 4:**
+  - full penalty records
+  - a link from each payment to its penalty
+  - a per-session expiry time
+  - penalties added to the sync outbox (rebuilt in place, without losing unsynced rows)
+- **`ReturnService`** (`apps/raspberry-pi/src/rental/return-service.ts`):
+  | Step | What happens |
+  |---|---|
+  | `startReturn(qr)` | Finds the student's rental, persists OVERDUE, and quotes the penalty using the rules in force when they borrowed. If something is owed, it opens a **penalty coin session**. |
+  | `openReturnLocker(id)` | Refused while any penalty is unpaid. Otherwise it unlocks **only the borrowed locker** (rental → RETURNING). |
+  | `verifyReturn(id, sensors)` | Correct tag and door closed → **COMPLETED**: calculator and locker become AVAILABLE, and `returned_at`, `was_overdue` and `overdue_minutes` are recorded. Wrong tag → `RFID_MISMATCH` (logged). No tag → `RFID_NOT_DETECTED`. |
+  | `abandonReturn(id)` | The student never placed the calculator: the rental goes back to ACTIVE or OVERDUE and the locker is locked up. |
+  | `markOverdueRentals()` | ACTIVE rentals past due become OVERDUE (the Phase 9 state machine calls this periodically). |
+- **Penalty payments** reuse the Phase 6 coin session (`openPenaltySession`):
+  - If the student walks away mid-payment, the coins so far are **kept as part-payment**, because the student owes them anyway, so no refund is needed. A WARNING is logged for officers.
+  - If the student comes back later, they pay only the **extra** time since.
+- **Returns work fully offline** (Rule 11), because everything runs on the kiosk's own SQLite database and syncs later.
+- `npm run demo:pi` now ends with a late return: P10 penalty → locker refused until paid → wrong calculator rejected → correct calculator accepted.
+- 42 new tests (19 penalty and return-check, 22 return flow, 1 migration upgrade), 240 in total.
+
+### ⚠️ Risk of the pay-first policy (team decision)
+A late student without enough coins can't open the locker, so they leave **with the calculator**, and the penalty keeps growing. Each refused attempt is logged as `Late return not completed …` (WARNING), so officers can follow up. If this becomes a problem, switch to "return first, pay later": the penalty is then recorded as unpaid and blocks the student's next rental.
+
+### Phase 7 verification checklist
+- [ ] `npm run typecheck` shows no errors, and `npm test` reports **240 passed**
+- [ ] `npm run demo:pi` ends with **OVERDUE 1 HOUR / Penalty: P10**, the locker refused before paying, **Payment P10/P10**, **WRONG CALCULATOR**, then **RETURN SUCCESS / PENALTY: P10**
+- [ ] `npm run check:pi` shows `user_version=4, expected=4`
+- [ ] Dashboard **Settings**, as Super Admin:
+  - shows ₱20 / 180 min / ₱10 every 90 min / grace 10
+  - the preview row reads ₱0, ₱10, ₱10, ₱20, ₱20, ₱30, ₱160
+  - change the grace period to 15, save (green toast), then change it back
+- [ ] SQL Editor: `select action, new_value from audit_logs where action = 'SETTINGS_UPDATED' order by id desc limit 2;` shows both changes
+- [ ] Optional: as a VIEWER or OFFICER, the Settings page is read-only
+
+---
+
+## 6.0b Phase 6 hand-off (completed): coin payment sessions
 
 ### Built
 - **Shared coin rules** (`packages/shared/src/payment/coins.ts`). The Allan 1239 is programmed so that **pulses = peso value** (₱1 = 1 pulse … ₱20 = 20).
