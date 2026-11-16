@@ -106,7 +106,7 @@ describe('migrations & seed', () => {
     expect(await count('select * from public.students')).toBe(5);
   });
 
-  it('has the current pricing: ₱20 for 3 hours, then ₱20 per overdue hour', async () => {
+  it('has the current pricing: ₱20 for 3 hours, then ₱10 per started 1.5 h overdue', async () => {
     const { rows } = await db.query<Record<string, unknown>>('select * from public.system_settings');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -114,14 +114,14 @@ describe('migrations & seed', () => {
       grace_period_minutes: 10,
       penalty_enabled: true,
       penalty_type: 'PER_INTERVAL',
-      penalty_interval_minutes: 60,
+      penalty_interval_minutes: 90,
       max_concurrent_rentals_per_student: 1,
       unpaid_penalty_blocks_rental: true,
       allow_offline_returns: true,
       allow_offline_rentals: false,
     });
     expect(Number(rows[0]!.rental_fee)).toBe(20);
-    expect(Number(rows[0]!.penalty_amount)).toBe(20);
+    expect(Number(rows[0]!.penalty_amount)).toBe(10);
   });
 
   it('seed is idempotent (can be run twice)', async () => {
