@@ -18,6 +18,8 @@
     "dev:pi": "npm run dev --workspace @calc-rental/raspberry-pi",
     "start:pi": "npm run start --workspace @calc-rental/raspberry-pi",
     "check:pi": "npm run check --workspace @calc-rental/raspberry-pi",
+    "demo:pi": "npm run demo:rental --workspace @calc-rental/raspberry-pi",
+    "seed:pi": "npm run seed:dev --workspace @calc-rental/raspberry-pi --",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc --noEmit -p supabase/tests",
     "test": "vitest run",
     "test:watch": "vitest",
