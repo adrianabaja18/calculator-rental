@@ -23,8 +23,10 @@ Officers watch everything on a **web dashboard**.
 | Admin dashboard + REST API | Next.js 16, React 19, TypeScript, Tailwind 4 | `apps/web` |
 | Kiosk controller | Node.js 22 + TypeScript on Raspberry Pi 4 | `apps/raspberry-pi` |
 | Shared types, validation, API contracts | TypeScript + Zod | `packages/shared` |
-| Central database, auth, realtime | Supabase (PostgreSQL 17) | `supabase/` |
-| Offline store on the Pi | SQLite (better-sqlite3) | `apps/raspberry-pi/data` |
+| **Main operating database** (on the kiosk) | SQLite (better-sqlite3) | `apps/raspberry-pi/data` |
+| Cloud copy, admin data, officer auth, realtime | Supabase (PostgreSQL 17) | `supabase/` |
+
+**Architecture: SQLite-first** (decided 2026-11-16). The kiosk records everything in its own SQLite database, so it keeps working with or without internet, and syncs to Supabase. The dashboard (deployed on Vercel) reads Supabase. Settings and other officer changes flow back down to the kiosk. See [architecture.md §3.8](architecture.md).
 
 The deeper design is in [architecture.md](architecture.md), [database.md](database.md) and [raspberry-pi.md](raspberry-pi.md).
 
@@ -36,16 +38,16 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 |---|---|---|
 | 1 | Project setup: monorepo, Next.js, Supabase clients, Pi app, SQLite, health checks | ✅ Done and verified |
 | 2 | Database schema, migrations, seed, shared types, validation, QR parser | ✅ Done, pushed to Supabase and verified |
-| 3 | Admin authentication, dashboard shell, navigation | ✅ Built and tested. ⏳ Signed-in checklist pending (§6). |
-| 4 | Students, calculators and lockers pages | ⬜ Next |
-| 5 | Rental backend: eligibility, availability, reservation | ⬜ |
-| 6 | Coin payment sessions | ⬜ |
-| 7 | Return backend, RFID verification, penalty engine | ⬜ |
+| 3 | Admin authentication, dashboard shell, navigation | ✅ Done and verified |
+| 4 | Students, calculators and lockers pages (admin data lives in Supabase) | ⬜ Next |
+| 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ⬜ |
+| 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ⬜ |
+| 7 | Return rules, RFID verification, penalty engine (shared logic) | ⬜ |
 | 8 | Realtime dashboard | ⬜ |
 | 9 | Raspberry Pi service: state machine, adapters, device auth | ⬜ |
 | 10 | ESP32-CAM QR firmware + serial link | ⬜ |
 | 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer | ⬜ |
-| 12 | Offline synchronization | ⬜ |
+| 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ⬜ |
 | 13 | Error handling, audit logs, device monitoring | ⬜ |
 | 14 | Testing, simulator, system validation | ⬜ |
 | 15 | Deployment and final documentation | ⬜ |
@@ -65,6 +67,8 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 3 | Add a **3rd relay** to switch the coin selector's 12 V power? Otherwise coins inserted while idle are swallowed. | Phase 11 | Recommended, not decided |
 | 4 | Add **2 reed switches** (door sensors)? | Phase 11 | Recommended, not decided |
 | 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 (update seed/inventory) | Not collected yet |
+| 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
+| 7 | **After-hours rule:** if the kiosk is unplugged overnight, does overdue time keep counting (penalties overnight), or should rentals be due by closing time? | Phase 7 (penalty settings) | Open question |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
 | — | School ID QR format | — | ✅ `FULL NAME<TAB>10-digit student number<TAB>COURSE` |
 
