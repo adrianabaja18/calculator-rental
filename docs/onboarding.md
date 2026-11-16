@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-18, end of **Phase 7** (returns, RFID verification, penalties)
+> **Last updated:** 2026-11-19, end of **Phase 8** (live dashboard)
 
 ---
 
@@ -42,9 +42,9 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 4 | Students, calculators and lockers pages (admin data lives in Supabase) | ✅ Done and verified |
 | 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ✅ Done and verified |
 | 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ✅ Done and verified |
-| 7 | Return rules, RFID verification, penalty engine, Settings page | ✅ Built and tested. ⏳ Checklist pending (§6). |
-| 8 | Realtime dashboard | ⬜ Next |
-| 9 | Raspberry Pi service: state machine, adapters, device auth | ⬜ |
+| 7 | Return rules, RFID verification, penalty engine, Settings page | ✅ Done and verified |
+| 8 | Realtime dashboard: summary cards, Active Rentals countdowns, live updates | ✅ Built and tested. ⏳ Checklist pending (§6). |
+| 9 | Raspberry Pi service: state machine, adapters, device auth | ⬜ Next |
 | 10 | ESP32-CAM QR firmware + serial link | ⬜ |
 | 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer | ⬜ |
 | 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ⬜ |
@@ -118,7 +118,7 @@ The Pi `.env` defaults work on a laptop.
 | Command | Expected result |
 |---|---|
 | `npm run typecheck` | No errors |
-| `npm test` | All tests pass (240 at the end of Phase 7) |
+| `npm test` | All tests pass (245 at the end of Phase 8) |
 | `npm run dev:web`, then open http://localhost:3000 | Redirects to the login page. After signing in, the Dashboard's system check cards are green. |
 | `npm run check:pi` (second terminal, web running) | `SYSTEM CHECK PASSED` |
 
@@ -158,7 +158,37 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 7 hand-off: returns, RFID verification, penalties
+## 6. Phase 8 hand-off: live dashboard
+
+### Built
+- **Dashboard cards**, all computed by one database view, `v_dashboard_summary`:
+  - Total Calculators, Available, Currently Rented, Overdue
+  - Rentals Today, Returns Today, Income Today, Outstanding Penalties
+  - "Today" is the current day in **Philippine time**; stored times stay UTC. Overdue is computed live from `due_at`, so no scheduled job is needed (spec §26).
+  - Each card links to the page with the details.
+- **Live updates (Supabase Realtime):**
+  - Migration `20261119000100` adds calculators, lockers, students, rentals, payments, penalties and devices to the Realtime publication.
+  - `LiveRefresh` (`apps/web/src/components/live-refresh.tsx`) listens for changes and refreshes the page, at most every 0.5 s. A **Live** indicator shows the connection, and its pulse respects reduced-motion settings.
+  - Row Level Security applies to Realtime too, so only active admins receive changes.
+- **Active Rentals** (`/rentals`):
+  - Every calculator that is out, soonest due first. Columns: student, student number, course, calculator, locker, borrowed and due times (PH time), status, amount paid, and penalty due.
+  - A **countdown** reads "Due in 01:42:15" or **"Overdue by 00:32:16"** (red). It ticks every second in the browser from `due_at` (spec §25), and nothing is written to the database.
+- `rentalCountdown()` in `packages/shared`, with tests. 5 new tests in total, 245 overall.
+
+### Not yet (by design)
+- Kiosk rentals reach Supabase only once **sync** exists (Phase 12). Until then, Active Rentals shows "No calculators are out right now", and the rental and income cards show 0. That's correct for your current data.
+- Transactions, Payments and Penalties pages: they show data once sync brings it in (Phases 12–13).
+
+### Phase 8 verification checklist
+- [ ] `npm run typecheck` shows no errors, and `npm test` reports **245 passed**
+- [ ] **Dashboard** shows real numbers: Total Calculators **3** (CALC-001–003), Available **2**, everything else 0 / ₱0.00, and a green **Live** indicator
+- [ ] **Live update test:** open the Dashboard in **two tabs**. In tab 2, put **CALC-002** in maintenance. Within about a second, tab 1 shows **Available 1** with no reload. Reactivate it, and tab 1 goes back to **2**.
+- [ ] **Active Rentals** shows the empty state with a Live indicator
+- [ ] Phone width: the cards stack into one column
+
+---
+
+## 6.0c Phase 7 hand-off (completed): returns, RFID verification, penalties
 
 Delivered as **two PRs**:
 - **7a** `phase-7a/penalty-rules-settings`: shared penalty and return rules, the Supabase policy migration, and the Settings page

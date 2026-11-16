@@ -24,6 +24,7 @@ import {
   effectiveRentalStatus,
   isOverdue,
   overdueMinutes,
+  rentalCountdown,
 } from './lifecycle';
 import { systemSettingsFromRow, type SystemSettingsRow } from './settings';
 import { TRANSACTION_CODE_PATTERN, generateTransactionCode } from './transaction-code';
@@ -294,5 +295,17 @@ describe('systemSettingsFromRow', () => {
 
   it('refuses invalid settings instead of running on them', () => {
     expect(() => systemSettingsFromRow({ ...row, rental_fee: '0' })).toThrow();
+  });
+});
+
+describe('rentalCountdown', () => {
+  const due = '2026-10-20T05:00:00.000Z';
+  it.each([
+    ['2026-10-20T03:17:45.000Z', false, '01:42:15'],
+    ['2026-10-20T05:00:00.000Z', false, '00:00:00'],
+    ['2026-10-20T05:32:16.000Z', true, '00:32:16'],
+    ['2026-10-21T07:05:00.000Z', true, '26:05:00'],
+  ])('at %s → overdue=%s %s', (now, overdue, text) => {
+    expect(rentalCountdown(due, new Date(now))).toEqual({ overdue, text });
   });
 });

@@ -466,6 +466,57 @@ describe('views', () => {
       await db.query(`update public.device_registry set is_enabled = false`);
       expect(await status()).toBe('DISABLED');
     }));
+
+  it('v_dashboard_summary counts the 8 dashboard cards', () =>
+    isolated(async () => {
+      const summary = async () =>
+        (await db.query<Record<string, unknown>>(`select * from public.v_dashboard_summary`)).rows[0]!;
+      expect(await summary()).toMatchObject({
+        total_calculators: 2,
+        available_calculators: 2,
+        rented_calculators: 0,
+        overdue_rentals: 0,
+        rentals_today: 0,
+        returns_today: 0,
+      });
+
+      // Juan has CALC-001 and is overdue; Maria borrowed and returned CALC-002 today.
+      const juan = await db.query<{ id: string }>(
+        `insert into public.rental_transactions (student_id, calculator_id, locker_id, status, rental_fee, amount_paid,
+           rental_duration_minutes, rented_at, due_at, rental_rfid_verified)
+         values ($1, $2, $3, 'ACTIVE', 20, 20, 180, now() - interval '1 minute', now() - interval '30 seconds', true) returning id`,
+        [STUDENT_1, CALC_1, LOCKER_1],
+      );
+      await db.query(`update public.calculators set status = 'RENTED' where id = $1`, [CALC_1]);
+      await db.query(
+        `insert into public.payments (rental_transaction_id, student_id, payment_type, required_amount, amount_received, status, paid_at)
+         values ($1, $2, 'RENTAL', 20, 20, 'PAID', now())`,
+        [juan.rows[0]!.id, STUDENT_1],
+      );
+      await db.query(
+        `insert into public.rental_transactions (student_id, calculator_id, locker_id, status, rental_fee, amount_paid,
+           rental_duration_minutes, rented_at, due_at, returned_at, rental_rfid_verified, return_rfid_verified, return_rfid_uid)
+         values ($1, $2, $3, 'COMPLETED', 20, 20, 180, now() - interval '2 minutes', now() + interval '3 hours', now() - interval '1 minute',
+           true, true, '04-E5-F6-A7-B8')`,
+        [STUDENT_2, CALC_2, LOCKER_2],
+      );
+      await db.query(
+        `insert into public.penalties (rental_transaction_id, student_id, overdue_minutes, calculated_amount) values ($1, $2, 60, 10)`,
+        [juan.rows[0]!.id, STUDENT_1],
+      );
+
+      const s = await summary();
+      expect(s).toMatchObject({
+        total_calculators: 2,
+        available_calculators: 1,
+        rented_calculators: 1,
+        overdue_rentals: 1,
+        returns_today: 1,
+        rentals_today: 2,
+      });
+      expect(Number(s.income_today)).toBe(20);
+      expect(Number(s.outstanding_penalties)).toBe(10);
+    }));
 });
 
 describe('row level security', () => {
