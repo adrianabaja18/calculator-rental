@@ -7,7 +7,7 @@
 ```
                         ┌──────────────────────────────────────────────┐
                         │              SUPABASE (cloud)                │
-                        │  PostgreSQL  (source of truth, RLS enabled)  │
+                        │  PostgreSQL  (cloud copy + admin data, RLS)  │
                         │  Auth        (admin/officer logins)          │
                         │  Realtime    (live dashboard updates)        │
                         │  pg_cron     (overdue processing)            │
@@ -18,8 +18,9 @@
                         │        NEXT.JS WEB APP  (apps/web)           │
                         │  • Admin dashboard (React 19 + Tailwind)     │
                         │  • REST API route handlers  /api/...         │
-                        │  • Business rules: eligibility, payment,     │
-                        │    penalties, reservations, sync ingestion   │
+                        │  • Sync API: receives kiosk records,         │
+                        │    sends admin changes down to the kiosk     │
+                        │  • Admin actions (settings, blocks, waivers) │
                         └───────────────▲──────────────────────────────┘
                  HTTPS + per-device     │                   ▲ HTTPS (browser)
                  credential + idempotency keys              │
@@ -27,7 +28,8 @@
                         │ RASPBERRY PI 4 (apps/      │   │ Officer's browser │
                         │ raspberry-pi) Node.js + TS │   │ (dashboard only,  │
                         │ • Kiosk state machine      │   │  never GPIO)      │
-                        │ • SQLite offline store     │   └───────────────────┘
+                        │ • SQLite = MAIN operating  │   └───────────────────┘
+                        │   database + business rules│
                         │ • Hardware adapters        │
                         └──┬─────┬─────┬─────┬────┬──┘
                    USB-UART│  SPI│  I2C│ GPIO│GPIO│
@@ -52,9 +54,10 @@
 | **Next.js 16** | Hosts the React dashboard *and* the backend REST API (route handlers under `src/app/api`). One deployable app, no separate Express server. |
 | **TypeScript** | Used everywhere: web, Pi service, and `packages/shared`. Shared types and Zod schemas guarantee the Pi and the API agree on every request and response. |
 | **Node.js 22** | Runtime for the Next.js server and the Raspberry Pi service. |
-| **Supabase** | PostgreSQL (authoritative data), Auth (officer logins), Realtime (live dashboard), Row Level Security (access control), pg_cron (scheduled overdue processing). |
-| **SQLite** | Runs only on the Pi: local config, physical locker state, the current kiosk session, and an offline queue of events and returns waiting to sync. It is **not** the main database. |
-| **Raspberry Pi 4** | Main embedded controller. Runs the kiosk state machine and drives the LCD, relays, solenoids, RFID readers, coin selector and buzzer. Talks to the backend over HTTPS. |
+| **Supabase** | The **cloud copy** of everything the kiosk records, and the **main copy** of admin-managed data (settings, inventory setup, student blocks, waivers). Also provides Auth (officer logins), Realtime (live dashboard) and Row Level Security. |
+| **SQLite** | The kiosk's **main operating database** (SQLite-first, decided 2026-11-16). Every rental, return, payment and event is written here first, so the kiosk works with or without internet, and is then synced to Supabase. |
+| **Raspberry Pi 4** | Main embedded controller. Runs the kiosk state machine and the rental/payment/return rules, and drives the LCD, relays, solenoids, RFID readers, coin selector and buzzer. Syncs with the backend over HTTPS. |
+| **Vercel** | Hosts the Next.js dashboard and API in production (Phase 15). |
 | **ESP32-CAM** | A dedicated QR scanner. Decodes the student-ID QR code and sends the **raw text** to the Pi over USB serial. It has no Wi-Fi credentials and no business logic. |
 
 ## 3. Key design decisions (recommended options)
@@ -63,7 +66,9 @@
 `apps/web`, `apps/raspberry-pi`, and `packages/shared` live in one repository. npm workspaces ship with Node, so no extra tool (pnpm or turbo) is needed. The shared package is TypeScript source compiled by each consumer: Next uses `transpilePackages`, and the Pi runs it through `tsx`.
 
 ### 3.2 Backend = Next.js route handlers (no separate server)
-The specification asks for Next.js route handlers. Putting business logic there keeps one deployable unit. Every protected operation goes through server code that validates input with Zod, so the browser and the Pi are never trusted directly (Rules 14 and 15).
+The specification asks for Next.js route handlers, which keeps one deployable unit. Every protected operation goes through server code that validates input with Zod, so the browser is never trusted directly (Rule 15).
+
+With SQLite-first (§3.8), the rental, payment, return and penalty rules run **on the Pi**. They are written once as pure TypeScript functions in `packages/shared`, so they are unit-tested on a laptop and can also be reused by the server. The server still validates every record the Pi syncs (Rule 14) and enforces the database constraints from Phase 2.
 
 ### 3.3 Three Supabase clients
 | File | Key | Used by | RLS |
@@ -91,19 +96,46 @@ Why not one global secret in `.env`? Per-device credentials can be revoked indiv
 - Message example: `{"type":"qr","seq":42,"data":"<raw QR text>"}`
 - The ESP32 forwards **raw** QR text only. The Pi and the backend parse and validate it, so the QR format can change without reflashing the ESP32.
 
-### 3.6 Overdue status: dynamic and scheduled
-- **Correctness:** a database view and the API compute `effective_status = OVERDUE` whenever `status = ACTIVE AND now() > due_at`. Nothing depends on the dashboard being open.
-- **Persistence:** a `pg_cron` job (built into Supabase) runs every minute, sets `status = OVERDUE`, and raises notifications. Even if the job is late, the dynamic rule is still correct.
+### 3.6 Overdue status: computed, never dependent on a screen being open
+- **On the dashboard:** the `v_rentals` view computes `effective_status = OVERDUE` whenever `status = ACTIVE AND now() > due_at`.
+- **On the kiosk:** the same rule runs from `packages/shared` against SQLite, so returns are judged correctly even offline.
+- **Optional persistence:** a `pg_cron` job can later store `status = OVERDUE` and raise notifications. The computed rule stays correct even if the job is late.
 
 ### 3.7 Time
-All databases store **UTC** (`timestamptz` in PostgreSQL, ISO-8601 strings in SQLite). The server clock is authoritative for `rented_at` and `due_at`. Only the UI and the LCD convert to `Asia/Manila` using helpers in `packages/shared/src/time.ts`.
+All databases store **UTC** (`timestamptz` in PostgreSQL, ISO-8601 strings in SQLite). Only the UI and the LCD convert to `Asia/Manila`, using helpers in `packages/shared/src/time.ts`.
 
-### 3.8 Offline policy (conservative)
-| Operation | Online | Offline |
+With SQLite-first, the **Pi's clock** sets `rented_at` and `due_at`. The Pi 4 has no battery-backed clock, so:
+- On boot, the kiosk stays in a **STARTING / "Please wait"** state until the system clock has synced over the internet (NTP). Only then does it accept rentals.
+- When syncing, the server compares the Pi's clock with its own and records any drift as a `WARNING` device event.
+- **Deferred decision:** adding a DS3231 real-time clock module would let the kiosk keep correct time when it boots without internet (see `onboarding.md` §3).
+
+### 3.8 SQLite-first data ownership (decided 2026-11-16)
+The kiosk must keep working 24/7 even if the internet drops, so the **Pi's SQLite database is the main operating database**. Supabase receives a copy and is what the dashboard (on Vercel) shows.
+
+| Data | Main copy | Sync direction |
 |---|---|---|
-| New rental | Allowed after server-side eligibility check | **Refused by default.** Eligibility and payment locking can't be verified safely. |
-| Return | Normal | **Accepted** if the expected RFID UID for that locker is read locally. Stored in SQLite, synced later with idempotent UUIDs. |
-| Events and logs | Sent immediately | Queued in SQLite and synced with exponential backoff |
+| Rentals, returns, kiosk payments, coin events, device events, locker sensor state | **Pi (SQLite)** | Pi → Supabase |
+| Students first seen at the kiosk | **Pi** creates them | Pi → Supabase |
+| Settings, calculator and locker setup, student blocks, officer-recorded penalty payments and waivers | **Supabase** (edited on the dashboard) | Supabase → Pi |
+
+**Sync rules**
+- Every record created on the Pi gets a **UUID on the Pi**, so a re-sent record is recognized and never duplicated (idempotent upsert).
+- **Push** (Pi → Supabase): an outbox table in SQLite (`sync_queue`) is drained in order, with retries and exponential backoff. A record is marked synced only after the server confirms it.
+- **Pull** (Supabase → Pi): the Pi asks for admin changes made since its last pull, using a version or `updated_at` cursor, and applies them locally.
+- **Conflicts:** each kind of data has exactly one owner (table above), so the two sides never edit the same field. The one shared case, a student's status, is set by officers and only read by the kiosk.
+- The server **re-validates** everything it receives (Rule 14). Phase 2's database constraints remain the final safety net.
+
+**Behavior**
+| Situation | What happens |
+|---|---|
+| Online (normal) | The kiosk works from SQLite and syncs within seconds; the dashboard is near-real-time. |
+| Internet drops | Rentals and returns continue. Records queue in SQLite, and the dashboard shows "Kiosk offline, last synced X min ago". |
+| Officer changes something while the kiosk is offline | It reaches the kiosk on reconnection (for example, a student blocked from the dashboard can still borrow until then). |
+| Kiosk unplugged after school hours | On the next boot it waits for clock sync, then flushes its queue before or while serving students. |
+
+**Assumption:** one kiosk. With several kiosks offline at the same time, one student could borrow from each. Supabase's one-open-rental rule would reject the second rental at sync time and flag it for officers.
+
+**Power-off safety:** SQLite runs in WAL mode with `synchronous=FULL`, so committed records survive a power cut. Pulling the plug can still damage the SD card's file system, so Phase 15 adds a safe-shutdown button or a read-only root file system.
 
 ## 4. Folder structure
 

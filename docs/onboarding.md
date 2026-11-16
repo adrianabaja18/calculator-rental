@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-16, end of **Phase 2** (database schema)
+> **Last updated:** 2026-11-16, end of **Phase 3** (admin authentication and dashboard shell)
 
 ---
 
@@ -23,8 +23,10 @@ Officers watch everything on a **web dashboard**.
 | Admin dashboard + REST API | Next.js 16, React 19, TypeScript, Tailwind 4 | `apps/web` |
 | Kiosk controller | Node.js 22 + TypeScript on Raspberry Pi 4 | `apps/raspberry-pi` |
 | Shared types, validation, API contracts | TypeScript + Zod | `packages/shared` |
-| Central database, auth, realtime | Supabase (PostgreSQL 17) | `supabase/` |
-| Offline store on the Pi | SQLite (better-sqlite3) | `apps/raspberry-pi/data` |
+| **Main operating database** (on the kiosk) | SQLite (better-sqlite3) | `apps/raspberry-pi/data` |
+| Cloud copy, admin data, officer auth, realtime | Supabase (PostgreSQL 17) | `supabase/` |
+
+**Architecture: SQLite-first** (decided 2026-11-16). The kiosk records everything in its own SQLite database, so it keeps working with or without internet, and syncs to Supabase. The dashboard (deployed on Vercel) reads Supabase. Settings and other officer changes flow back down to the kiosk. See [architecture.md §3.8](architecture.md).
 
 The deeper design is in [architecture.md](architecture.md), [database.md](database.md) and [raspberry-pi.md](raspberry-pi.md).
 
@@ -35,17 +37,17 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Project setup: monorepo, Next.js, Supabase clients, Pi app, SQLite, health checks | ✅ Done and verified |
-| 2 | Database schema, migrations, seed, shared types, validation, QR parser | ✅ Built and tested locally. ⏳ Push to Supabase pending (§6). |
-| 3 | Admin authentication, dashboard shell, navigation | ⬜ Next |
-| 4 | Students, calculators and lockers pages | ⬜ |
-| 5 | Rental backend: eligibility, availability, reservation | ⬜ |
-| 6 | Coin payment sessions | ⬜ |
-| 7 | Return backend, RFID verification, penalty engine | ⬜ |
+| 2 | Database schema, migrations, seed, shared types, validation, QR parser | ✅ Done, pushed to Supabase and verified |
+| 3 | Admin authentication, dashboard shell, navigation | ✅ Done and verified |
+| 4 | Students, calculators and lockers pages (admin data lives in Supabase) | ⬜ Next |
+| 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ⬜ |
+| 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ⬜ |
+| 7 | Return rules, RFID verification, penalty engine (shared logic) | ⬜ |
 | 8 | Realtime dashboard | ⬜ |
 | 9 | Raspberry Pi service: state machine, adapters, device auth | ⬜ |
 | 10 | ESP32-CAM QR firmware + serial link | ⬜ |
 | 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer | ⬜ |
-| 12 | Offline synchronization | ⬜ |
+| 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ⬜ |
 | 13 | Error handling, audit logs, device monitoring | ⬜ |
 | 14 | Testing, simulator, system validation | ⬜ |
 | 15 | Deployment and final documentation | ⬜ |
@@ -65,6 +67,8 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 3 | Add a **3rd relay** to switch the coin selector's 12 V power? Otherwise coins inserted while idle are swallowed. | Phase 11 | Recommended, not decided |
 | 4 | Add **2 reed switches** (door sensors)? | Phase 11 | Recommended, not decided |
 | 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 (update seed/inventory) | Not collected yet |
+| 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
+| 7 | **After-hours rule:** if the kiosk is unplugged overnight, does overdue time keep counting (penalties overnight), or should rentals be due by closing time? | Phase 7 (penalty settings) | Open question |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
 | — | School ID QR format | — | ✅ `FULL NAME<TAB>10-digit student number<TAB>COURSE` |
 
@@ -114,8 +118,8 @@ The Pi `.env` defaults work on a laptop.
 | Command | Expected result |
 |---|---|
 | `npm run typecheck` | No errors |
-| `npm test` | All tests pass (70 at the end of Phase 2) |
-| `npm run dev:web`, then open http://localhost:3000 | All status cards green |
+| `npm test` | All tests pass (89 at the end of Phase 3) |
+| `npm run dev:web`, then open http://localhost:3000 | Redirects to the login page. After signing in, the Dashboard's system check cards are green. |
 | `npm run check:pi` (second terminal, web running) | `SYSTEM CHECK PASSED` |
 
 ---
@@ -154,7 +158,57 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 2 hand-off: what was built and what's left
+## 6. Phase 3 hand-off: admin authentication and dashboard shell
+
+### Built
+- **Login** at `/login`: email and password through Supabase Auth, using a Server Action and `useActionState`.
+  - Inputs are validated with Zod on the server.
+  - The error is the same for an unknown email and a wrong password, so nobody can probe which accounts exist.
+  - A signed-in user whose profile isn't active is signed straight back out with a clear message.
+  - Logins, rejected logins and logouts are written to `audit_logs`, and `profiles.last_login_at` is updated.
+- **Two-layer protection**, the pattern recommended by Next.js 16:
+  1. `src/proxy.ts` (Next 16's replacement for `middleware.ts`) refreshes the session cookie on every page request and redirects signed-out visitors to `/login?next=<page>`. It's a fast, optimistic check only.
+  2. `requireAdmin(role)` in `src/lib/auth/session.ts` is the **real** check. It verifies the JWT, loads the profile from the database, and sends the user to `/login`, `/pending` (inactive account) or `/dashboard?denied=1` (role too low). Every dashboard layout, page and Server Action calls it.
+- **Role hierarchy** `VIEWER < OFFICER < SUPER_ADMIN` via `hasRole()` in `packages/shared/src/roles.ts`. The sidebar hides links a role can't use, but each page checks again, because hiding a link isn't security.
+- **Open-redirect protection:** `?next=` only accepts paths inside this app (`safeNextPath`).
+- **Dashboard shell:** a responsive sidebar (a slide-in drawer on phones), a header with the officer's name, role and Sign out, plus loading, error and 404 states.
+- **All 12 pages are routed:** Dashboard, Active Rentals, Transaction History, Payments, Penalties, Calculators, Lockers, Students, Device Status, Event Logs, Audit Log (Officer and above) and Settings. Each one not built yet shows which phase builds it and what it will contain.
+- The Phase 1 system check now lives on the Dashboard page. `/` simply redirects to it.
+- All three Supabase clients are typed with the generated `database.types.ts`, so queries are checked against the real schema.
+- 19 new tests (role hierarchy and redirect safety), 89 in total.
+
+### Where the code lives
+| File | Purpose |
+|---|---|
+| `apps/web/src/proxy.ts` | Session refresh and optimistic redirects |
+| `apps/web/src/lib/auth/session.ts` | `getCurrentAdmin()` and `requireAdmin()`, the security check |
+| `apps/web/src/lib/auth/actions.ts` | `signIn` and `signOut` Server Actions |
+| `apps/web/src/lib/audit.ts` | `writeAuditLog()` helper |
+| `apps/web/src/app/login/`, `app/pending/` | Public auth pages |
+| `apps/web/src/app/(dashboard)/` | Every protected page. The `(dashboard)` folder name doesn't appear in URLs. |
+| `apps/web/src/components/layout/` | Sidebar, header, icons, navigation list |
+
+### Adding a new dashboard page (how-to)
+1. Create `apps/web/src/app/(dashboard)/<name>/page.tsx`.
+2. Make `await requireAdmin(AdminRole.<minimum role>)` the page's first line.
+3. Add the link to `NAV_SECTIONS` in `components/layout/nav-items.ts`.
+
+### Phase 3 verification checklist
+- [ ] `npm run typecheck` shows no errors
+- [ ] `npm test` reports **89 passed**
+- [ ] Signed out, visiting http://localhost:3000/students redirects to `/login?next=%2Fstudents`
+- [ ] A wrong password shows "Invalid email or password."
+- [ ] Signing in with your Super Admin account opens **Students** (the page you originally asked for)
+- [ ] The sidebar shows all 12 pages, and the header shows your email and "Super Admin"
+- [ ] The Dashboard's system check cards are all green
+- [ ] On a narrow window or a phone, the ☰ button opens and closes the menu
+- [ ] **Sign out** returns to `/login`. Pressing Back doesn't show dashboard data.
+- [ ] Supabase SQL Editor: `select action, actor_label, created_at from audit_logs order by id desc limit 5;` shows your `LOGIN` and `LOGOUT`
+- [ ] Optional role test: create a second user. It shows "not been activated" until you set `is_active = true`. As a `VIEWER` it can't see **Audit Log**, and opening `/audit` directly shows "Your role doesn't have access to that page."
+
+---
+
+## 6.1 Phase 2 hand-off (completed): database
 
 ### Built
 - **Database schema** in 5 migrations under `supabase/migrations/`:
@@ -183,7 +237,7 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 | Device secrets live in a separate `device_credentials` table | Locked away from every dashboard user |
 | History tables refuse `DELETE` even with the service-role key | Rules 12 and 13 hold even if the API has a bug |
 
-### Still to do for Phase 2 (project lead, once)
+### Setting up a Supabase project (done once by the project lead; repeat only for a new project)
 1. Log in to the Supabase CLI. This opens a browser to approve.
    ```bash
    npm run db:login
