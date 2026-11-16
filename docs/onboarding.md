@@ -84,10 +84,10 @@ You don't need Docker. The Supabase CLI is installed by `npm install`.
 
 ### 4.2 Get the code
 ```bash
-git clone <repository URL>
+git clone https://github.com/adrianabaja18/calculator-rental.git
 ```
 ```bash
-cd calculator-rental-system
+cd calculator-rental
 ```
 ```bash
 npm install
