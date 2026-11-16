@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-17, end of **Phase 4** (students, calculators and lockers pages)
+> **Last updated:** 2026-11-17, end of **Phase 5** (rental rules on the kiosk)
 
 ---
 
@@ -39,9 +39,9 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 1 | Project setup: monorepo, Next.js, Supabase clients, Pi app, SQLite, health checks | ✅ Done and verified |
 | 2 | Database schema, migrations, seed, shared types, validation, QR parser | ✅ Done, pushed to Supabase and verified |
 | 3 | Admin authentication, dashboard shell, navigation | ✅ Done and verified |
-| 4 | Students, calculators and lockers pages (admin data lives in Supabase) | ✅ Built and tested. ⏳ Signed-in checklist pending (§6). |
-| 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ⬜ Next |
-| 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ⬜ |
+| 4 | Students, calculators and lockers pages (admin data lives in Supabase) | ✅ Done and verified |
+| 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ✅ Built and tested. ⏳ Checklist pending (§6). |
+| 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ⬜ Next |
 | 7 | Return rules, RFID verification, penalty engine (shared logic) | ⬜ |
 | 8 | Realtime dashboard | ⬜ |
 | 9 | Raspberry Pi service: state machine, adapters, device auth | ⬜ |
@@ -118,7 +118,7 @@ The Pi `.env` defaults work on a laptop.
 | Command | Expected result |
 |---|---|
 | `npm run typecheck` | No errors |
-| `npm test` | All tests pass (100 at the end of Phase 4) |
+| `npm test` | All tests pass (168 at the end of Phase 5) |
 | `npm run dev:web`, then open http://localhost:3000 | Redirects to the login page. After signing in, the Dashboard's system check cards are green. |
 | `npm run check:pi` (second terminal, web running) | `SYSTEM CHECK PASSED` |
 
@@ -158,7 +158,66 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 4 hand-off: students, calculators and lockers
+## 6. Phase 5 hand-off: rental rules on the kiosk (SQLite-first)
+
+Delivered as **two smaller PRs**, so reviewers (and Sourcery) can read them:
+- **5a** `phase-5a/shared-rental-rules`: pure rules in `packages/shared/src/rental/`
+- **5b** `phase-5b/kiosk-rental-service`: the kiosk's SQLite tables and rental service
+
+### Built
+**Shared rules** (`packages/shared/src/rental/`): pure functions with no database or hardware, so they're easy to test and explain.
+| Function | Rule |
+|---|---|
+| `checkBorrowEligibility` | Refuses blocked or inactive students, anyone with an open rental (Rule 1, including a duplicate scan mid-payment), and unpaid penalties when the setting is on. |
+| `selectLockerForRental` / `isLockerAssignable` | Lends a locker only if the database says available **and** the RFID reader sees the expected tag **and** the lock is closed (spec §5.14). Lowest locker number first. |
+| `findInventoryMismatches` | Finds lockers that should hold a calculator but whose reader sees nothing or the wrong tag. |
+| `RENTAL_TRANSITIONS`, `assertTransition` | The rental state machine. For example, it's impossible to open a locker before payment, cancel a paid rental, or reuse a completed one. |
+| `computeDueAt`, `isOverdue`, `overdueMinutes` | Due time is the rental time plus the duration (3 h). Overdue starts the moment that time passes. |
+| `generateTransactionCode` | Kiosk-made codes such as `RNT-20261117-K001-7F3A` |
+| `systemSettingsFromRow` | Converts a Supabase settings row into validated kiosk settings, and rejects invalid ones. |
+
+**Kiosk SQLite**: migration 2 in `apps/raspberry-pi/src/db/migrations.ts`.
+- Tables `settings`, `students`, `lockers`, `calculators`, `rentals`, `penalties`, `device_events` and `sync_queue`. Names mirror Supabase, which makes syncing a straight copy.
+- These replace the spec's cache-style names (`cached_students`, `offline_transactions`, …), because under SQLite-first this is the main database.
+- Money is stored in **centavos** (whole numbers), so there are no rounding errors.
+- SQLite enforces one open rental per student, calculator and locker. It also blocks "paid" without full payment, and "active" without confirmed removal.
+- **Outbox:** every change writes a `sync_queue` row in the same transaction, so nothing is saved without being scheduled for upload. Phase 12 sends the queue to Supabase.
+
+**Rental service** (`apps/raspberry-pi/src/rental/rental-service.ts`):
+| Step | Status after |
+|---|---|
+| `startRental(qr)`: parse QR, register a new student, check eligibility, pick a locker, reserve it | PAYMENT_PENDING (locker RESERVED) |
+| `markPaid(id, amount)`: refused if below the fee (Phase 6 calls this) | PAID |
+| `startDispensing(id)`: one payment opens exactly one locker | DISPENSING (locker OPEN) |
+| `confirmRemoval(id, sensors)`: refused while the reader still sees the calculator | **ACTIVE**, due in 3 h (calculator and locker RENTED) |
+| `cancelRental` (payment timeout) / `failDispensing` (locker or removal problem; officer follows up on the refund) | CANCELLED / FAILED (locker freed) |
+
+Each step is atomic and runs only if the rental is still in the expected status, so a repeated or late call can't apply the same step twice. Events (`QR_SCANNED`, `QR_INVALID`, `INVENTORY_MISMATCH`, `LOCKER_UNLOCK_REQUESTED`, `RENTAL_STARTED`, `PAYMENT_TIMEOUT`, …) are logged for the Event Logs page.
+
+**Dev tools:**
+- `npm run demo:pi` prints a full borrow and every refusal case as LCD screens.
+- `npm run seed:pi` loads the same fake data as Supabase (same IDs) into the kiosk's SQLite file.
+
+**Tests:** 68 new (43 shared-rule tests, 25 kiosk service tests). They cover the spec's borrowing list: valid and invalid student, active rental, no calculator, insufficient and successful payment, correct locker, removal, duplicate prevention.
+
+### Not yet (by design)
+- The kiosk **state machine**, LCD and hardware that call this service: Phases 9–11.
+- **Coins:** Phase 6 builds the coin session that calls `markPaid`.
+- **Uploading the outbox** to Supabase and pulling officer changes down: Phase 12. Until then, kiosk rentals don't appear on the dashboard.
+
+### Phase 5 verification checklist
+- [ ] `npm run typecheck` shows no errors, and `npm test` reports **168 passed**
+- [ ] `npm run demo:pi` shows, in order:
+  - Juan's quote (**P20, 3 Hours, Locker 1**)
+  - **RENTAL SUCCESS** with a due time 3 hours later
+  - the refusals: ACTIVE RENTAL, ACCOUNT BLOCKED, INVALID ID, NO CALCULATOR
+  - Locker 2 *not* handed out when its reader sees nothing
+- [ ] `npm run seed:pi` reports `students=5 lockers=2 calculators=2 settings=1`, and running it twice gives the same numbers
+- [ ] `npm run check:pi` shows `Schema migrations — user_version=2, expected=2`
+
+---
+
+## 6.0 Phase 4 hand-off (completed): students, calculators and lockers
 
 ### Built
 - **Students** (`/students`)
@@ -363,6 +422,8 @@ calculator-rental-system/
 | `npm run dev:web` | Dashboard and API at http://localhost:3000 |
 | `npm run dev:pi` | Pi kiosk service (mock hardware), restarts on save |
 | `npm run check:pi` | Pi system check: SQLite + backend |
+| `npm run demo:pi` | Phase 5 demo: a full borrow and the refusal cases on a throwaway database, printed as LCD screens |
+| `npm run seed:pi` | Load the fake development data into the kiosk's SQLite file. Add `-- --sensors-ready` to simulate both calculators detected. |
 | `npm run typecheck` | Type-check everything |
 | `npm test` | All tests |
 | `npm run test:db` | Database schema tests only |

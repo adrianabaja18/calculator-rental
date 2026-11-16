@@ -16,11 +16,13 @@ export type LocalDatabase = Database.Database;
  *  - busy_timeout = 5000  : wait instead of failing if the file is briefly locked.
  */
 export function openLocalDatabase(sqlitePath: string): LocalDatabase {
-  const absolutePath = path.resolve(sqlitePath);
-  fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+  // ':memory:' = throwaway database for tests and the demo script.
+  const inMemory = sqlitePath === ':memory:';
+  const target = inMemory ? ':memory:' : path.resolve(sqlitePath);
+  if (!inMemory) fs.mkdirSync(path.dirname(target), { recursive: true });
 
-  const db = new Database(absolutePath);
-  db.pragma('journal_mode = WAL');
+  const db = new Database(target);
+  if (!inMemory) db.pragma('journal_mode = WAL');
   db.pragma('synchronous = FULL');
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
