@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ADMIN_ROLE_LABEL, APP_NAME, hasRole, type AdminRole } from '@calc-rental/shared';
 import { signOut } from '@/lib/auth/actions';
+import { ToastProvider } from '@/components/ui/toast';
 import { Icon } from './icons';
 import { NAV_SECTIONS } from './nav-items';
 
@@ -117,7 +118,9 @@ export function DashboardShell({ admin, children }: { admin: ShellAdmin; childre
           </div>
         </header>
 
-        <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</main>
+        <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+          <ToastProvider>{children}</ToastProvider>
+        </main>
       </div>
     </div>
   );

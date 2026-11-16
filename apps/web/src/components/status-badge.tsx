@@ -1,6 +1,6 @@
 /**
- * Small coloured status pill. Reused by every dashboard table later
- * (calculators, lockers, rentals, devices).
+ * Small coloured status pill. Reused by every dashboard table
+ * (calculators, lockers, students, rentals, devices).
  */
 
 export type BadgeTone = 'green' | 'blue' | 'red' | 'amber' | 'gray';
@@ -16,9 +16,9 @@ const toneClasses: Record<BadgeTone, string> = {
 export function StatusBadge({ tone, children }: { tone: BadgeTone; children: React.ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide ring-1 ring-inset ${toneClasses[tone]}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap uppercase tracking-wide ring-1 ring-inset ${toneClasses[tone]}`}
     >
-      {children}
+      {typeof children === 'string' ? children.replace(/_/g, ' ') : children}
     </span>
   );
 }

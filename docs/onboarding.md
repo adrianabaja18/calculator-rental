@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-16, end of **Phase 3** (admin authentication and dashboard shell)
+> **Last updated:** 2026-11-17, end of **Phase 4** (students, calculators and lockers pages)
 
 ---
 
@@ -39,8 +39,8 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 1 | Project setup: monorepo, Next.js, Supabase clients, Pi app, SQLite, health checks | ✅ Done and verified |
 | 2 | Database schema, migrations, seed, shared types, validation, QR parser | ✅ Done, pushed to Supabase and verified |
 | 3 | Admin authentication, dashboard shell, navigation | ✅ Done and verified |
-| 4 | Students, calculators and lockers pages (admin data lives in Supabase) | ⬜ Next |
-| 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ⬜ |
+| 4 | Students, calculators and lockers pages (admin data lives in Supabase) | ✅ Built and tested. ⏳ Signed-in checklist pending (§6). |
+| 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ⬜ Next |
 | 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ⬜ |
 | 7 | Return rules, RFID verification, penalty engine (shared logic) | ⬜ |
 | 8 | Realtime dashboard | ⬜ |
@@ -68,7 +68,7 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 4 | Add **2 reed switches** (door sensors)? | Phase 11 | Recommended, not decided |
 | 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 (update seed/inventory) | Not collected yet |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
-| 7 | **After-hours rule:** if the kiosk is unplugged overnight, does overdue time keep counting (penalties overnight), or should rentals be due by closing time? | Phase 7 (penalty settings) | Open question |
+| — | Pricing and after-hours rule | — | ✅ Decided 2026-11-17 (may change): **₱20 for 3 hours, then ₱20 per hour overdue**, and overdue time **keeps counting overnight** while the kiosk is off. Applied in migration `20261117000100`; the 10-minute grace period is kept. Still to settle in Phase 7: does a started hour count as a full hour (1 h 5 min late = ₱40, or ₱20)? |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
 | — | School ID QR format | — | ✅ `FULL NAME<TAB>10-digit student number<TAB>COURSE` |
 
@@ -118,7 +118,7 @@ The Pi `.env` defaults work on a laptop.
 | Command | Expected result |
 |---|---|
 | `npm run typecheck` | No errors |
-| `npm test` | All tests pass (89 at the end of Phase 3) |
+| `npm test` | All tests pass (100 at the end of Phase 4) |
 | `npm run dev:web`, then open http://localhost:3000 | Redirects to the login page. After signing in, the Dashboard's system check cards are green. |
 | `npm run check:pi` (second terminal, web running) | `SYSTEM CHECK PASSED` |
 
@@ -158,7 +158,67 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 3 hand-off: admin authentication and dashboard shell
+## 6. Phase 4 hand-off: students, calculators and lockers
+
+### Built
+- **Students** (`/students`)
+  - Search by name, student number or course, and filter by status. Filters live in the URL, so they survive a refresh.
+  - Columns: name and student number, course, current rental (with calculator and due time), rental count, overdue count, unpaid penalties, status.
+  - **Block / Unblock** (Officer and above). Blocking needs a reason. A student who is blocked can still *return* a calculator.
+- **Calculators** (`/calculators`)
+  - Columns: code and model, RFID UID, locker, status and condition, current borrower and due time, last transaction and rental count.
+  - **Add calculator.** The next code is suggested. RFID UIDs are accepted in any reader format and saved as `04-A1-B2-C3-D4`. A calculator becomes AVAILABLE only once it has a locker and isn't DAMAGED.
+  - **Edit, Maintenance and Reactivate.** A calculator out with a student can't change locker or RFID tag, and can't go into maintenance. An AVAILABLE calculator can't lose its locker or be marked DAMAGED.
+- **Lockers** (`/lockers`)
+  - Shows the database status *next to* what the kiosk's sensors report (lock, door, RFID tag seen), plus "Ready to lend" from `v_lockers.is_assignable`.
+  - A red banner appears on an **inventory mismatch**, where the system expects a calculator but the reader doesn't see it.
+  - **Edit** (name and notes) and **Maintenance on/off**. **Unlock** is shown disabled until the kiosk command channel exists (Phase 13).
+- **Every officer action:**
+  - re-checks the role on the server
+  - validates input with Zod
+  - writes with the server key (dashboard users stay read-only in RLS)
+  - records before/after values in `audit_logs`
+  - shows a toast
+  - asks for confirmation in a dialog that blocks double-submits
+  - Under SQLite-first, the kiosk picks these changes up on its next sync (Phase 12).
+- **Migration `20261117000100_pricing_and_admin_views.sql`** (already pushed to Supabase):
+  - the new pricing
+  - views `v_students` and `v_calculators`, which give each page its counts and current borrower in a single query
+- **Reusable UI** in `src/components/ui/`:
+  - `ActionDialog` (confirmation and form dialog bound to a Server Action)
+  - `ToastProvider` / `useToast`
+  - `TableCard` / `Th` / `Td` / `EmptyRow`
+  - `FilterBar`
+  - form fields
+- **Helpers** in `src/lib/`:
+  - `status-tones.ts` (badge colors per status, as in the spec)
+  - `format.ts` (pesos, PH time, relative time, and `cleanSearch` so search text can't change a database filter)
+  - `action-result.ts` (consistent results and friendly database error messages)
+- 11 new tests (2 database view tests, 9 formatting and search-cleaning tests), 100 in total.
+
+### Adding an officer action (how-to)
+1. Write a `'use server'` function `(prev, formData) => Promise<ActionResult>` in the page's `actions.ts`.
+2. Inside it: `requireAdmin(AdminRole.OFFICER)`, Zod `safeParse`, write with `createSupabaseAdminClient()`, `writeAuditLog(...)`, `revalidatePath(...)`, then return `actionOk(...)`.
+3. In the page, wrap it in `<ActionDialog action={...} hidden={{ id }}>…fields…</ActionDialog>`.
+
+### Phase 4 verification checklist
+Sign in as your Super Admin, then check:
+- [ ] `npm run typecheck` shows no errors, and `npm test` reports **100 passed**
+- [ ] **Students** lists the 5 seed students. Searching `maria` or `BSCpE` filters the list. **Clear** resets it.
+- [ ] Block **Juan Dela Cruz** with a reason. You see a green toast, a red BLOCKED badge and the reason. Unblock him again.
+- [ ] Try to block without a reason. The dialog stays open with an error.
+- [ ] **Calculators** shows CALC-001 and CALC-002 in Locker 1 and Locker 2.
+- [ ] Add **CALC-003** with RFID `04:11:22:33:44` and **no locker**. It's saved as `04-11-22-33-44` with status MAINTENANCE.
+- [ ] Add another calculator with RFID `04-A1-B2-C3-D4`. You're told "That RFID tag is already assigned to another calculator."
+- [ ] Move **CALC-002** to maintenance (reason required), then **Reactivate** it.
+- [ ] **Lockers** shows both lockers as AVAILABLE, with lock, door and RFID `UNKNOWN` and the kiosk `NEVER_SEEN`. That's correct until the Pi is connected, so "Not lendable right now" is also correct.
+- [ ] Put **Locker 2** in maintenance and end it again.
+- [ ] Supabase SQL Editor: `select action, target_type, reason from audit_logs order by id desc limit 10;` lists your STUDENT_BLOCKED, CALCULATOR_CREATED, CALCULATOR_MAINTENANCE, LOCKER_MAINTENANCE and other actions.
+- [ ] Optional cleanup: CALC-003 can't be deleted (inventory history is kept). Leave it in maintenance, or reuse it later.
+
+---
+
+## 6.1 Phase 3 hand-off (completed): admin authentication and dashboard shell
 
 ### Built
 - **Login** at `/login`: email and password through Supabase Auth, using a Server Action and `useActionState`.
@@ -208,7 +268,7 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6.1 Phase 2 hand-off (completed): database
+## 6.2 Phase 2 hand-off (completed): database
 
 ### Built
 - **Database schema** in 5 migrations under `supabase/migrations/`:
