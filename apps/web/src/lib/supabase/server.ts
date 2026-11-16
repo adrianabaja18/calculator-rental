@@ -12,8 +12,11 @@ import type { Database } from '@/lib/supabase/database.types';
  * still applies with that admin's identity.
  */
 export async function createSupabaseServerClient() {
-  const env = getPublicEnv();
+  // Read cookies FIRST: this marks the page as per-request (dynamic), so
+  // `next build` never tries to pre-render it. CI builds have no Supabase
+  // env vars, and checking them first would crash the build.
   const cookieStore = await cookies();
+  const env = getPublicEnv();
 
   return createServerClient<Database>(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
     cookies: {

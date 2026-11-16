@@ -1,7 +1,9 @@
 import 'server-only';
 import { cache } from 'react';
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { AdminRole, hasRole } from '@calc-rental/shared';
+import { readPublicEnv } from '@/lib/env';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 /**
@@ -27,6 +29,11 @@ export interface CurrentAdmin {
 
 /** Returns the signed-in user's admin profile, or null if not signed in. */
 export const getCurrentAdmin = cache(async (): Promise<CurrentAdmin | null> => {
+  // Mark the request as dynamic before anything else (see supabase/server.ts).
+  await cookies();
+  // Server not configured (fresh clone, CI build): nobody can be signed in.
+  if (!readPublicEnv()) return null;
+
   const supabase = await createSupabaseServerClient();
   const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
   const userId = claimsData?.claims?.sub;
