@@ -106,11 +106,11 @@ describe('migrations & seed', () => {
     expect(await count('select * from public.students')).toBe(5);
   });
 
-  it('creates the default settings from the specification', async () => {
+  it('has the current pricing: ₱20 for 3 hours, then ₱20 per overdue hour', async () => {
     const { rows } = await db.query<Record<string, unknown>>('select * from public.system_settings');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      rental_duration_minutes: 120,
+      rental_duration_minutes: 180,
       grace_period_minutes: 10,
       penalty_enabled: true,
       penalty_type: 'PER_INTERVAL',
@@ -120,8 +120,8 @@ describe('migrations & seed', () => {
       allow_offline_returns: true,
       allow_offline_rentals: false,
     });
-    expect(Number(rows[0]!.rental_fee)).toBe(5);
-    expect(Number(rows[0]!.penalty_amount)).toBe(5);
+    expect(Number(rows[0]!.rental_fee)).toBe(20);
+    expect(Number(rows[0]!.penalty_amount)).toBe(20);
   });
 
   it('seed is idempotent (can be run twice)', async () => {
@@ -386,6 +386,71 @@ describe('views', () => {
       // DB says AVAILABLE but the reader sees nothing -> inconsistency, not assignable (spec §5.14).
       await db.query(`update public.lockers set rfid_state = 'NO_TAG', last_detected_rfid_uid = null where id = $1`, [LOCKER_1]);
       expect((await assignable()).rows[0]).toEqual({ is_assignable: false, has_inventory_mismatch: true });
+    }));
+
+  it('v_students shows the current rental, history counts and unpaid penalties', () =>
+    isolated(async () => {
+      const completed = await db.query<{ id: string }>(
+        `insert into public.rental_transactions (
+           student_id, calculator_id, locker_id, status, rental_fee, amount_paid, rental_duration_minutes,
+           rented_at, due_at, returned_at, rental_rfid_verified, return_rfid_verified, return_rfid_uid,
+           was_overdue, overdue_minutes)
+         values ($1, $2, $3, 'COMPLETED', 20, 20, 180,
+           now() - interval '6 hours', now() - interval '3 hours', now() - interval '2 hours',
+           true, true, '04-A1-B2-C3-D4', true, 60) returning id`,
+        [STUDENT_1, CALC_1, LOCKER_1],
+      );
+      await db.query(
+        `insert into public.penalties (rental_transaction_id, student_id, overdue_minutes, calculated_amount)
+         values ($1, $2, 60, 20)`,
+        [completed.rows[0]!.id, STUDENT_1],
+      );
+      await db.query(
+        `insert into public.rental_transactions (
+           student_id, calculator_id, locker_id, status, rental_fee, amount_paid, rental_duration_minutes,
+           rented_at, due_at, rental_rfid_verified)
+         values ($1, $2, $3, 'ACTIVE', 20, 20, 180, now() - interval '1 hour', now() + interval '2 hours', true)`,
+        [STUDENT_1, CALC_2, LOCKER_2],
+      );
+
+      const { rows } = await db.query<Record<string, unknown>>(
+        `select open_rental_status, open_rental_calculator_code, rental_count, overdue_count,
+                unpaid_penalty_total, unpaid_penalty_count
+         from public.v_students where id = $1`,
+        [STUDENT_1],
+      );
+      expect(rows[0]).toMatchObject({
+        open_rental_status: 'ACTIVE',
+        open_rental_calculator_code: 'CALC-002',
+        rental_count: 2,
+        overdue_count: 1,
+        unpaid_penalty_count: 1,
+      });
+      expect(Number(rows[0]!.unpaid_penalty_total)).toBe(20);
+
+      const other = await db.query<Record<string, unknown>>(
+        `select open_rental_id, rental_count, unpaid_penalty_total from public.v_students where id = $1`,
+        [STUDENT_2],
+      );
+      expect(other.rows[0]).toMatchObject({ open_rental_id: null, rental_count: 0 });
+    }));
+
+  it('v_calculators shows the locker and the current borrower', () =>
+    isolated(async () => {
+      await db.query(
+        `insert into public.rental_transactions (
+           student_id, calculator_id, locker_id, status, rental_fee, amount_paid, rental_duration_minutes,
+           rented_at, due_at, rental_rfid_verified)
+         values ($1, $2, $3, 'ACTIVE', 20, 20, 180, now(), now() + interval '3 hours', true)`,
+        [STUDENT_2, CALC_1, LOCKER_1],
+      );
+      const { rows } = await db.query<Record<string, unknown>>(
+        `select code, locker_number, borrower_full_name, rental_count from public.v_calculators order by code`,
+      );
+      expect(rows).toEqual([
+        { code: 'CALC-001', locker_number: 1, borrower_full_name: 'MARIA SANTOS', rental_count: 1 },
+        { code: 'CALC-002', locker_number: 2, borrower_full_name: null, rental_count: 0 },
+      ]);
     }));
 
   it('v_device_status derives ONLINE / OFFLINE from the heartbeat', () =>

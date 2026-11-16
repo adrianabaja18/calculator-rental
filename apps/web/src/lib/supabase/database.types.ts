@@ -348,8 +348,22 @@ export type Database = {
             foreignKeyName: "device_events_transaction_id_fkey"
             columns: ["transaction_id"]
             isOneToOne: false
+            referencedRelation: "v_calculators"
+            referencedColumns: ["open_rental_id"]
+          },
+          {
+            foreignKeyName: "device_events_transaction_id_fkey"
+            columns: ["transaction_id"]
+            isOneToOne: false
             referencedRelation: "v_rentals"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "device_events_transaction_id_fkey"
+            columns: ["transaction_id"]
+            isOneToOne: false
+            referencedRelation: "v_students"
+            referencedColumns: ["open_rental_id"]
           },
         ]
       }
@@ -577,14 +591,42 @@ export type Database = {
             foreignKeyName: "payments_rental_transaction_id_fkey"
             columns: ["rental_transaction_id"]
             isOneToOne: false
+            referencedRelation: "v_calculators"
+            referencedColumns: ["open_rental_id"]
+          },
+          {
+            foreignKeyName: "payments_rental_transaction_id_fkey"
+            columns: ["rental_transaction_id"]
+            isOneToOne: false
             referencedRelation: "v_rentals"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payments_rental_transaction_id_fkey"
+            columns: ["rental_transaction_id"]
+            isOneToOne: false
+            referencedRelation: "v_students"
+            referencedColumns: ["open_rental_id"]
           },
           {
             foreignKeyName: "payments_student_id_fkey"
             columns: ["student_id"]
             isOneToOne: false
             referencedRelation: "students"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payments_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "v_calculators"
+            referencedColumns: ["borrower_id"]
+          },
+          {
+            foreignKeyName: "payments_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "v_students"
             referencedColumns: ["id"]
           },
         ]
@@ -662,14 +704,42 @@ export type Database = {
             foreignKeyName: "penalties_rental_transaction_id_fkey"
             columns: ["rental_transaction_id"]
             isOneToOne: false
+            referencedRelation: "v_calculators"
+            referencedColumns: ["open_rental_id"]
+          },
+          {
+            foreignKeyName: "penalties_rental_transaction_id_fkey"
+            columns: ["rental_transaction_id"]
+            isOneToOne: false
             referencedRelation: "v_rentals"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "penalties_rental_transaction_id_fkey"
+            columns: ["rental_transaction_id"]
+            isOneToOne: false
+            referencedRelation: "v_students"
+            referencedColumns: ["open_rental_id"]
           },
           {
             foreignKeyName: "penalties_student_id_fkey"
             columns: ["student_id"]
             isOneToOne: false
             referencedRelation: "students"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "penalties_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "v_calculators"
+            referencedColumns: ["borrower_id"]
+          },
+          {
+            foreignKeyName: "penalties_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "v_students"
             referencedColumns: ["id"]
           },
           {
@@ -829,6 +899,13 @@ export type Database = {
             foreignKeyName: "rental_transactions_calculator_id_fkey"
             columns: ["calculator_id"]
             isOneToOne: false
+            referencedRelation: "v_calculators"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rental_transactions_calculator_id_fkey"
+            columns: ["calculator_id"]
+            isOneToOne: false
             referencedRelation: "v_lockers"
             referencedColumns: ["calculator_id"]
           },
@@ -872,6 +949,20 @@ export type Database = {
             columns: ["student_id"]
             isOneToOne: false
             referencedRelation: "students"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rental_transactions_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "v_calculators"
+            referencedColumns: ["borrower_id"]
+          },
+          {
+            foreignKeyName: "rental_transactions_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "v_students"
             referencedColumns: ["id"]
           },
         ]
@@ -1000,6 +1091,50 @@ export type Database = {
       }
     }
     Views: {
+      v_calculators: {
+        Row: {
+          borrower_full_name: string | null
+          borrower_id: string | null
+          borrower_student_number: string | null
+          code: string | null
+          condition: Database["public"]["Enums"]["calculator_condition"] | null
+          created_at: string | null
+          id: string | null
+          last_transaction_at: string | null
+          locker_id: string | null
+          locker_name: string | null
+          locker_number: number | null
+          locker_status: Database["public"]["Enums"]["locker_status"] | null
+          model: string | null
+          notes: string | null
+          open_rental_code: string | null
+          open_rental_due_at: string | null
+          open_rental_id: string | null
+          open_rental_status:
+            | Database["public"]["Enums"]["rental_status"]
+            | null
+          rental_count: number | null
+          rfid_uid: string | null
+          status: Database["public"]["Enums"]["calculator_status"] | null
+          updated_at: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "calculators_locker_id_fkey"
+            columns: ["locker_id"]
+            isOneToOne: true
+            referencedRelation: "lockers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "calculators_locker_id_fkey"
+            columns: ["locker_id"]
+            isOneToOne: true
+            referencedRelation: "v_lockers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       v_device_status: {
         Row: {
           connection_status: string | null
@@ -1170,6 +1305,13 @@ export type Database = {
             foreignKeyName: "rental_transactions_calculator_id_fkey"
             columns: ["calculator_id"]
             isOneToOne: false
+            referencedRelation: "v_calculators"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rental_transactions_calculator_id_fkey"
+            columns: ["calculator_id"]
+            isOneToOne: false
             referencedRelation: "v_lockers"
             referencedColumns: ["calculator_id"]
           },
@@ -1215,7 +1357,49 @@ export type Database = {
             referencedRelation: "students"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "rental_transactions_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "v_calculators"
+            referencedColumns: ["borrower_id"]
+          },
+          {
+            foreignKeyName: "rental_transactions_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "v_students"
+            referencedColumns: ["id"]
+          },
         ]
+      }
+      v_students: {
+        Row: {
+          blocked_reason: string | null
+          course_program: string | null
+          created_at: string | null
+          full_name: string | null
+          id: string | null
+          last_transaction_at: string | null
+          notes: string | null
+          open_rental_calculator_code: string | null
+          open_rental_code: string | null
+          open_rental_due_at: string | null
+          open_rental_id: string | null
+          open_rental_status:
+            | Database["public"]["Enums"]["rental_status"]
+            | null
+          overdue_count: number | null
+          qr_identifier: string | null
+          rental_count: number | null
+          status: Database["public"]["Enums"]["student_status"] | null
+          student_number: string | null
+          unpaid_penalty_count: number | null
+          unpaid_penalty_total: number | null
+          updated_at: string | null
+          year_level: number | null
+        }
+        Relationships: []
       }
     }
     Functions: {
