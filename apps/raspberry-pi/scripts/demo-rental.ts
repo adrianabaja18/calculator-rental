@@ -1,5 +1,5 @@
 /**
- * Phase 5 demo — the borrowing rules running on a throwaway in-memory
+ * Phase 5–6 demo — the borrowing rules and coin payment running on a throwaway in-memory
  * SQLite database with the development seed (fake students).
  *
  *   npm run demo:pi
@@ -8,7 +8,9 @@
  * coin acceptor and LCD come in Phases 6, 9 and 11; here we call the
  * rental service directly and print what the LCD would show.
  */
-import { formatPhilippineTime } from '@calc-rental/shared';
+import { randomUUID } from 'node:crypto';
+import { formatPaymentLine, formatPhilippineTime } from '@calc-rental/shared';
+import { PaymentService } from '../src/payment/payment-service';
 import { DEV_IDS, seedDevData } from '../src/db/dev-seed';
 import { KioskStore } from '../src/db/kiosk-store';
 import { openLocalDatabase } from '../src/db/sqlite';
@@ -17,6 +19,7 @@ import { RentalService } from '../src/rental/rental-service';
 const store = new KioskStore(openLocalDatabase(':memory:'));
 seedDevData(store, { sensorsReady: true, nowIso: new Date().toISOString() });
 const service = new RentalService(store, { deviceCode: 'DEVICE-CALC-KIOSK-001' });
+const payments = new PaymentService(store, service);
 
 const peso = (centavos: number) => `P${centavos / 100}`;
 function lcd(line1: string, line2 = '') {
@@ -28,7 +31,7 @@ function step(title: string) {
 }
 
 console.log('==============================================================');
-console.log(' Phase 5 demo: borrowing rules on the kiosk (SQLite-first)');
+console.log(' Demo: borrowing + coin payment on the kiosk (SQLite-first)');
 console.log('==============================================================');
 
 step('Idle');
@@ -42,9 +45,22 @@ lcd(q.student.fullName, `Rental: ${peso(q.feeCentavos)}`);
 lcd(`Time: ${q.durationMinutes / 60} Hours`, `Locker ${q.locker.number}`);
 console.log(`   rental ${q.transactionCode} is PAYMENT_PENDING, locker ${q.locker.number} RESERVED`);
 
-step('Coins reach the fee (simulated)');
-lcd(`Payment ${peso(q.feeCentavos)}/${peso(q.feeCentavos)}`);
-console.log(`   markPaid → ${JSON.stringify(service.markPaid(q.rentalId, q.feeCentavos))}`);
+step('Coin acceptor enabled; Juan inserts P5, P5, then P10');
+const session = payments.openSession(q.rentalId);
+if (!session.ok) throw new Error(session.message);
+const pulses = (pesos: number, eventId = randomUUID()) => ({ eventId, pulseCount: pesos, occurredAt: new Date().toISOString() });
+const repeated = pulses(5);
+for (const c of [repeated, pulses(5), pulses(10)]) {
+  const outcome = payments.insertCoin(session.sessionId, c);
+  if (outcome.kind === 'credited') lcd(formatPaymentLine(outcome.progress), outcome.paidNow ? 'PAID' : 'Insert coins');
+  if (c === repeated) {
+    console.log(`   same coin event delivered twice → ${payments.insertCoin(session.sessionId, repeated).kind} (counted once)`);
+  }
+}
+console.log(`   rental is now ${store.getRental(q.rentalId)!.status}`);
+
+step('An extra P1 arrives after payment is complete');
+console.log(`   → ${JSON.stringify(payments.insertCoin(session.sessionId, pulses(1)))} (flagged for refund, never reused)`);
 
 step('Unlock the assigned locker');
 console.log(`   startDispensing → ${JSON.stringify(service.startDispensing(q.rentalId))}`);

@@ -68,6 +68,22 @@ export interface RentalRecord {
   updated_at: string;
 }
 
+export interface PaymentRecord {
+  id: string;
+  rental_id: string;
+  student_id: string;
+  payment_type: 'RENTAL' | 'PENALTY' | 'MANUAL_ADJUSTMENT';
+  method: 'COIN' | 'CASH' | 'GCASH' | 'OTHER';
+  required_centavos: number;
+  received_centavos: number;
+  status: 'PENDING' | 'PARTIAL' | 'PAID' | 'CANCELLED' | 'REFUNDED';
+  session_id: string;
+  paid_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export type SyncEntity = 'student' | 'rental' | 'device_event' | 'coin_event' | 'payment' | 'locker_state';
 
 const OPEN_LIST = OPEN_RENTAL_STATUSES.map((s) => `'${s}'`).join(', ');
@@ -262,6 +278,72 @@ export class KioskStore {
   getCalculatorRfidUid(calculatorId: string): string | null {
     const row = this.db.prepare('SELECT rfid_uid FROM calculators WHERE id = ?').get(calculatorId) as { rfid_uid: string } | undefined;
     return row?.rfid_uid ?? null;
+  }
+
+  // ---------------------------------------------------------------- payments
+  getPaymentBySession(sessionId: string): PaymentRecord | null {
+    return (this.db.prepare('SELECT * FROM payments WHERE session_id = ?').get(sessionId) as PaymentRecord) ?? null;
+  }
+
+  getLivePaymentForRental(rentalId: string): PaymentRecord | null {
+    return (
+      (this.db
+        .prepare(`SELECT * FROM payments WHERE rental_id = ? AND payment_type = 'RENTAL' AND status <> 'CANCELLED'`)
+        .get(rentalId) as PaymentRecord) ?? null
+    );
+  }
+
+  insertPayment(payment: Omit<PaymentRecord, 'paid_at' | 'notes'>): PaymentRecord {
+    this.db
+      .prepare(
+        `INSERT INTO payments (id, rental_id, student_id, payment_type, method, required_centavos, received_centavos, status, session_id, created_at, updated_at)
+         VALUES (@id, @rental_id, @student_id, @payment_type, @method, @required_centavos, @received_centavos, @status, @session_id, @created_at, @updated_at)`,
+      )
+      .run(payment);
+    const saved = this.getPaymentBySession(payment.session_id)!;
+    this.enqueue('payment', saved.id, saved);
+    return saved;
+  }
+
+  /** Same optimistic guard as updateRental: only applies if still in `expectedStatus`. */
+  updatePayment(id: string, expectedStatus: PaymentRecord['status'], changes: Partial<PaymentRecord>): boolean {
+    const keys = Object.keys(changes);
+    const result = this.db
+      .prepare(`UPDATE payments SET ${keys.map((k) => `${k} = @${k}`).join(', ')} WHERE id = @__id AND status = @__expected`)
+      .run({ ...changes, __id: id, __expected: expectedStatus });
+    if (result.changes === 0) return false;
+    this.enqueue('payment', id, this.db.prepare('SELECT * FROM payments WHERE id = ?').get(id));
+    return true;
+  }
+
+  /** Returns false if this coin event was already recorded (duplicate). */
+  insertCoinEvent(coin: {
+    id: string;
+    payment_id: string | null;
+    session_id: string | null;
+    value_centavos: number;
+    pulse_count: number;
+    occurred_at: string;
+  }): boolean {
+    const inserted =
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO coin_events (id, payment_id, session_id, value_centavos, pulse_count, occurred_at)
+           VALUES (@id, @payment_id, @session_id, @value_centavos, @pulse_count, @occurred_at)`,
+        )
+        .run(coin).changes === 1;
+    if (inserted) this.enqueue('coin_event', coin.id, coin);
+    return inserted;
+  }
+
+  /** Open payment sessions whose rental's payment window has passed. */
+  listExpiredPaymentSessions(nowIso: string): PaymentRecord[] {
+    return this.db
+      .prepare(
+        `SELECT p.* FROM payments p JOIN rentals r ON r.id = p.rental_id
+         WHERE p.status IN ('PENDING', 'PARTIAL') AND r.status = 'PAYMENT_PENDING' AND r.payment_expires_at < ?`,
+      )
+      .all(nowIso) as PaymentRecord[];
   }
 
   // ---------------------------------------------------------------- events & outbox
