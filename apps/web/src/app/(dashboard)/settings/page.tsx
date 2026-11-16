@@ -1,30 +1,26 @@
 import type { Metadata } from 'next';
-import { AdminRole } from '@calc-rental/shared';
-import { ComingSoon } from '@/components/coming-soon';
+import { AdminRole, hasRole, systemSettingsFromRow } from '@calc-rental/shared';
 import { PageHeader } from '@/components/page-header';
 import { requireAdmin } from '@/lib/auth/session';
+import { formatDateTime } from '@/lib/format';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { SettingsForm } from './settings-form';
 
-export const metadata: Metadata = { title: "Settings" };
+export const metadata: Metadata = { title: 'Settings' };
 
 export default async function SettingsPage() {
-  await requireAdmin(AdminRole.VIEWER);
+  const admin = await requireAdmin();
+  const supabase = await createSupabaseServerClient();
+  const { data: row, error } = await supabase.from('system_settings').select('*').eq('id', 1).single();
+  if (error || !row) throw new Error('Failed to load settings');
 
   return (
     <>
       <PageHeader
         title="Settings"
-        description="Rental and penalty rules used by the kiosk."
+        description={`Rental and penalty rules used by the kiosk. Last changed ${formatDateTime(row.updated_at)}.`}
       />
-      <ComingSoon
-        phase={7}
-        features={[
-          "Rental fee, duration and grace period",
-          "Penalty type, amount, interval, maximum",
-          "Accepted coins and timeouts",
-          "Offline policy",
-          "Editing restricted to Super Admins, every change audited",
-        ]}
-      />
+      <SettingsForm settings={systemSettingsFromRow(row)} canEdit={hasRole(admin.role, AdminRole.SUPER_ADMIN)} />
     </>
   );
 }

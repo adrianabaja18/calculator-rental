@@ -23,15 +23,15 @@ export const DEV_IDS = {
 
 export const DEV_RFID = { calc1: '04-A1-B2-C3-D4', calc2: '04-E5-F6-A7-B8' } as const;
 
-/** Current team pricing (2026-11-17): ₱20 / 3 h, ₱20 per overdue hour. */
+/** Team pricing: ₱20 / 3 h (2026-11-17); ₱10 per started 1.5 h overdue, 10-min grace (2026-11-18). */
 export const DEV_SETTINGS: SystemSettings = {
   rentalFee: 20,
   rentalDurationMinutes: 180,
   gracePeriodMinutes: 10,
   penaltyEnabled: true,
   penaltyType: PenaltyType.PER_INTERVAL,
-  penaltyAmount: 20,
-  penaltyIntervalMinutes: 60,
+  penaltyAmount: 10,
+  penaltyIntervalMinutes: 90,
   penaltySteps: [],
   maxPenalty: null,
   maxConcurrentRentalsPerStudent: 1,

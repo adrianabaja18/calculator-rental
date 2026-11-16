@@ -9,3 +9,4 @@ export * from './availability';
 export * from './lifecycle';
 export * from './transaction-code';
 export * from './settings';
+export * from './penalty';
