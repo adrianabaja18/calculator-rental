@@ -1,0 +1,19 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens for the admin dashboard.
+ * Status colours follow the project spec: AVAILABLE=green, RENTED=blue,
+ * OVERDUE=red, RETURNING=amber, MAINTENANCE=gray.
+ */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+}

@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Build output
+dist/
+build/
+
+# Environment files — NEVER commit real secrets.
+# Only the *.env.example templates are committed.
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# Raspberry Pi local SQLite database (WAL mode creates -wal and -shm files)
+apps/raspberry-pi/data/*.db
+apps/raspberry-pi/data/*.db-wal
+apps/raspberry-pi/data/*.db-shm
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/
+supabase/.env
+
+# Database dumps contain real student data — never commit them
+backups/
+
+# Generated Supabase types are committed (keep this line commented)
+# apps/web/src/lib/supabase/database.types.ts
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/

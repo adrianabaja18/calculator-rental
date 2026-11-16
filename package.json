@@ -1,0 +1,36 @@
+{
+  "name": "calculator-rental-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Raspberry Pi 4-Based Smart Calculator Rental and Return Locker System Using QR Code Identification (CPE 411)",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev:web": "npm run dev --workspace @calc-rental/web",
+    "build:web": "npm run build --workspace @calc-rental/web",
+    "start:web": "npm run start --workspace @calc-rental/web",
+    "dev:pi": "npm run dev --workspace @calc-rental/raspberry-pi",
+    "start:pi": "npm run start --workspace @calc-rental/raspberry-pi",
+    "check:pi": "npm run check --workspace @calc-rental/raspberry-pi",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc --noEmit -p supabase/tests",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:db": "vitest run supabase/tests",
+    "db:login": "supabase login",
+    "db:link": "supabase link",
+    "db:push": "supabase db push --remote",
+    "db:push:seed": "supabase db push --remote --include-seed",
+    "db:types": "supabase gen types typescript --remote > apps/web/src/lib/supabase/database.types.ts"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16",
+    "supabase": "^3.1.0",
+    "vitest": "^5.1.0"
+  }
+}

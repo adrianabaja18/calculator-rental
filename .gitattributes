@@ -1,0 +1,8 @@
+# Normalise line endings: the code is edited on Windows but runs on the
+# Raspberry Pi (Linux). Shell scripts with CRLF endings break on Linux.
+* text=auto eol=lf
+
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.db   binary
