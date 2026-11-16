@@ -171,4 +171,43 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX sync_queue_pending_idx ON sync_queue (seq) WHERE synced_at IS NULL;
     `,
   },
+  {
+    version: 3,
+    name: 'coin_payments',
+    sql: `
+      -- One coin payment session per rental attempt (mirrors Supabase payments).
+      CREATE TABLE payments (
+        id                 TEXT PRIMARY KEY NOT NULL,
+        rental_id          TEXT NOT NULL REFERENCES rentals (id),
+        student_id         TEXT NOT NULL REFERENCES students (id),
+        payment_type       TEXT NOT NULL DEFAULT 'RENTAL' CHECK (payment_type IN ('RENTAL', 'PENALTY', 'MANUAL_ADJUSTMENT')),
+        method             TEXT NOT NULL DEFAULT 'COIN' CHECK (method IN ('COIN', 'CASH', 'GCASH', 'OTHER')),
+        required_centavos  INTEGER NOT NULL CHECK (required_centavos >= 0),
+        received_centavos  INTEGER NOT NULL DEFAULT 0 CHECK (received_centavos >= 0),
+        status             TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PARTIAL', 'PAID', 'CANCELLED', 'REFUNDED')),
+        session_id         TEXT NOT NULL UNIQUE,
+        paid_at            TEXT,
+        notes              TEXT,
+        created_at         TEXT NOT NULL DEFAULT ${SQL_UTC_NOW},
+        updated_at         TEXT NOT NULL DEFAULT ${SQL_UTC_NOW},
+        CHECK (status <> 'PAID' OR (received_centavos >= required_centavos AND paid_at IS NOT NULL))
+      ) STRICT;
+      -- Rule 3: a rental has at most one live rental payment.
+      CREATE UNIQUE INDEX payments_one_live_rental_payment ON payments (rental_id)
+        WHERE payment_type = 'RENTAL' AND status <> 'CANCELLED';
+
+      -- Every coin the selector reported. id is created when the coin is
+      -- detected, so re-processing the same event is a no-op (Rule 23).
+      -- payment_id NULL = coin inserted when no payment was open (refund).
+      CREATE TABLE coin_events (
+        id             TEXT PRIMARY KEY NOT NULL,
+        payment_id     TEXT REFERENCES payments (id),
+        session_id     TEXT,
+        value_centavos INTEGER NOT NULL CHECK (value_centavos > 0),
+        pulse_count    INTEGER NOT NULL CHECK (pulse_count BETWEEN 1 AND 100),
+        occurred_at    TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX coin_events_payment_idx ON coin_events (payment_id);
+    `,
+  },
 ];

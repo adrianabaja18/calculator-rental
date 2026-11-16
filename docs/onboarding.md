@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-17, end of **Phase 5** (rental rules on the kiosk)
+> **Last updated:** 2026-11-17, end of **Phase 6** (coin payment sessions)
 
 ---
 
@@ -40,9 +40,9 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 2 | Database schema, migrations, seed, shared types, validation, QR parser | ✅ Done, pushed to Supabase and verified |
 | 3 | Admin authentication, dashboard shell, navigation | ✅ Done and verified |
 | 4 | Students, calculators and lockers pages (admin data lives in Supabase) | ✅ Done and verified |
-| 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ✅ Built and tested. ⏳ Checklist pending (§6). |
-| 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ⬜ Next |
-| 7 | Return rules, RFID verification, penalty engine (shared logic) | ⬜ |
+| 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ✅ Done and verified |
+| 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ✅ Built and tested. ⏳ Checklist pending (§6). |
+| 7 | Return rules, RFID verification, penalty engine (shared logic) | ⬜ Next |
 | 8 | Realtime dashboard | ⬜ |
 | 9 | Raspberry Pi service: state machine, adapters, device auth | ⬜ |
 | 10 | ESP32-CAM QR firmware + serial link | ⬜ |
@@ -118,7 +118,7 @@ The Pi `.env` defaults work on a laptop.
 | Command | Expected result |
 |---|---|
 | `npm run typecheck` | No errors |
-| `npm test` | All tests pass (168 at the end of Phase 5) |
+| `npm test` | All tests pass (198 at the end of Phase 6) |
 | `npm run dev:web`, then open http://localhost:3000 | Redirects to the login page. After signing in, the Dashboard's system check cards are green. |
 | `npm run check:pi` (second terminal, web running) | `SYSTEM CHECK PASSED` |
 
@@ -158,7 +158,44 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 5 hand-off: rental rules on the kiosk (SQLite-first)
+## 6. Phase 6 hand-off: coin payment sessions
+
+### Built
+- **Shared coin rules** (`packages/shared/src/payment/coins.ts`). The Allan 1239 is programmed so that **pulses = peso value** (₱1 = 1 pulse … ₱20 = 20).
+  - `groupPulses` turns raw pulse timestamps into coins (a gap of 200 ms or more ends a coin).
+  - `coinValueFromPulses` accepts only the coins enabled in Settings and rejects noise.
+  - `paymentProgress` / `formatPaymentLine` produce the LCD line, e.g. "Payment P5/P20".
+- **Kiosk SQLite migration 3:** `payments` and `coin_events`, mirroring Supabase. SQLite allows only one live rental payment per rental (Rule 3).
+- **`PaymentService`** (`apps/raspberry-pi/src/payment/payment-service.ts`):
+  | Call | What happens |
+  |---|---|
+  | `openSession(rentalId)` | For a reserved (PAYMENT_PENDING) rental. Opening twice returns the same session. |
+  | `insertCoin(sessionId, coin)` | Adds the coin (PENDING → PARTIAL → **PAID**), then marks the rental PAID in the same transaction. |
+  | `expireSessions()` | After the payment window (120 s), cancels the payment and the rental and frees the locker. |
+- **Coin safety:**
+  - **Duplicate coin events** are counted once, because each coin carries its own event ID.
+  - **Once paid, the payment is locked.** A later coin, or a coin inserted while the kiosk is idle, is recorded as **unattributed** for an officer refund. It's never applied to another rental (Rule 23).
+  - **Pulse noise** and coins disabled in Settings are logged and not credited.
+  - **Overpayment** (e.g. ₱10 + ₱20 for a ₱20 fee) is recorded, because the selector can't give change.
+  - **Timeout with coins already inserted** logs a WARNING: "refund needed".
+- Payments and coin events are queued in the sync outbox.
+- `npm run demo:pi` now pays with real coin handling (P5, P5, P10). It includes a duplicate event and a late coin.
+- 30 new tests (16 shared coin tests, 14 payment service tests), 198 in total.
+
+### Not yet (by design)
+- **Reading the real coin pulses on GPIO 17**, and enabling or disabling the selector: Phase 11. The adapter will use `groupPulses` and call `insertCoin`.
+- **Calling `expireSessions()` every few seconds:** the kiosk state machine, Phase 9.
+- **Payments on the dashboard** appear once the outbox syncs to Supabase (Phase 12). The Payments page is built when that data flows.
+- **Recommendation stands:** a 3rd relay to power the coin selector only during payment (open decision #3). The unattributed-coin logging is the fallback until then.
+
+### Phase 6 verification checklist
+- [ ] `npm run typecheck` shows no errors, and `npm test` reports **198 passed**
+- [ ] `npm run demo:pi` shows **Payment P5/P20**, then **P10/P20**, then **P20/P20 PAID**. The repeated coin says "duplicate (counted once)", and the extra P1 is "unattributed".
+- [ ] `npm run check:pi` shows `Schema migrations — user_version=3, expected=3`
+
+---
+
+## 6.0a Phase 5 hand-off (completed): rental rules on the kiosk (SQLite-first)
 
 Delivered as **two smaller PRs**, so reviewers (and Sourcery) can read them:
 - **5a** `phase-5a/shared-rental-rules`: pure rules in `packages/shared/src/rental/`
@@ -422,7 +459,7 @@ calculator-rental-system/
 | `npm run dev:web` | Dashboard and API at http://localhost:3000 |
 | `npm run dev:pi` | Pi kiosk service (mock hardware), restarts on save |
 | `npm run check:pi` | Pi system check: SQLite + backend |
-| `npm run demo:pi` | Phase 5 demo: a full borrow and the refusal cases on a throwaway database, printed as LCD screens |
+| `npm run demo:pi` | Demo: a full borrow with coin payment and the refusal cases on a throwaway database, printed as LCD screens |
 | `npm run seed:pi` | Load the fake development data into the kiosk's SQLite file. Add `-- --sensors-ready` to simulate both calculators detected. |
 | `npm run typecheck` | Type-check everything |
 | `npm test` | All tests |
