@@ -1,101 +1,188 @@
-# Raspberry Pi Hardware Plan
+# Raspberry Pi Hardware Guide
 
-> **Status:** planning document. The pin map is a *proposal* that is finalized and tested in Phase 11.
-> Nothing here needs to be wired for Phase 1, since the software runs with `HARDWARE_MODE=mock`.
+Final wiring for the team's parts (Phase 11), Raspberry Pi setup, and step-by-step bring-up.
+The software side is `apps/raspberry-pi` (Node.js kiosk) and `apps/raspberry-pi/hw-bridge/hw_bridge.py` (Python I/O helper).
 
-## 1. Bill of materials (as provided)
+> **Safety first:** wire with the power **off**. Never connect 12 V or 5 V to a GPIO pin; the Pi's GPIO is **3.3 V only**.
 
-| # | Part | Qty | Interface to Pi |
+## 1. Parts (as built)
+
+| Part | Qty | Connects to |
+|---|---|---|
+| Raspberry Pi 4 Model B | 1 | — |
+| RC522 RFID reader (13.56 MHz) | 2 | SPI0, CE0 / CE1 |
+| RFID tag inside each calculator | 2 | — |
+| 12 V solenoid lock | 2 | relay contacts |
+| ACE 6345 2-channel optocoupler relay module, 5 V, **active-LOW** | 1 | GPIO 5, GPIO 6 |
+| Allan 1239 Pro Max coin selector (12 V) | 1 | **PC817** optocoupler → GPIO 17 |
+| PC817 optocoupler (or PC817 module) | 1 | between coin selector and Pi |
+| 16×2 LCD with PCF8574 I2C backpack | 1 | I2C-1 (GPIO 2/3) |
+| Buzzer (active buzzer module) | 1 | GPIO 18 |
+| ESP32-CAM + OV2640 on USB-C base | 1 | Pi USB port (`/dev/ttyUSB0`) |
+| 12 V adapter (≥ 3 A) | 1 | solenoids + coin selector |
+| 5.1 V / 3 A USB-C supply | 1 | Raspberry Pi |
+
+**Not fitted (decided 2026-11-19):**
+- **No 3rd relay** for the coin selector. It's always powered, so a coin inserted while idle is logged for an officer refund.
+- **No door reed switches.** A return completes on the RFID check alone. Both can be added later through `DOOR_PINS` in `.env`.
+
+## 2. Pin map (BCM numbering)
+
+| Function | BCM | Physical pin | `.env` setting |
 |---|---|---|---|
-| 1 | Raspberry Pi 4 Model B (main controller) | 1 | — |
-| 2 | RFID reader | 2 | SPI (assumed MFRC522 / RC522, 13.56 MHz; see §5) |
-| 3 | RFID tag embedded in each calculator | 2 | — |
-| 4 | 12 V solenoid lock | 2 | through relays |
-| 5 | Relay module channel | 2 | GPIO |
-| 6 | ESP32-CAM + OV2640 with USB-C programmer base | 1 | USB serial |
-| 7 | LCD with I2C backpack (PCF8574) | 1 | I2C |
-| 8 | 12 V power adapter | 1 | power for solenoids and coin selector |
-| 9 | Allan 1239 Pro Max universal (multi-coin) coin selector | 1 | GPIO pulse input through an optocoupler |
-| — | Buzzer, optional door reed switches | — | GPIO |
+| Relay IN1 → Locker 1 solenoid | GPIO 5 | 29 | `RELAY_PINS=5,6` |
+| Relay IN2 → Locker 2 solenoid | GPIO 6 | 31 | |
+| Coin pulses (PC817 output) | GPIO 17 | 11 | `COIN_PIN=17` |
+| Buzzer | GPIO 18 | 12 | `BUZZER_PIN=18` |
+| LCD SDA | GPIO 2 | 3 | `I2C_BUS=1`, `LCD_I2C_ADDRESS=0x27` |
+| LCD SCL | GPIO 3 | 5 | |
+| RC522 SCK (both readers) | GPIO 11 | 23 | |
+| RC522 MOSI (both) | GPIO 10 | 19 | |
+| RC522 MISO (both) | GPIO 9 | 21 | |
+| RC522 #1 SDA/SS → Locker 1 | GPIO 8 (CE0) | 24 | `RFID_SPI=0.0,0.1` |
+| RC522 #2 SDA/SS → Locker 2 | GPIO 7 (CE1) | 26 | |
+| 3.3 V (RC522s, PC817 output side) | — | 1, 17 | |
+| 5 V (relay module, LCD) | — | 2, 4 | |
+| GND (everything, common) | — | 6, 9, 14, 20, 25, 30, 34, 39 | |
 
-## 2. Proposed GPIO map (BCM numbering)
+**Why GPIO 5 and 6 for the relays:** these pins are pulled **HIGH** while the Pi boots, and HIGH means OFF for an active-LOW relay board. So the solenoids **cannot fire during boot**.
 
-| Function | BCM GPIO | Physical pin | Notes |
-|---|---|---|---|
-| LCD SDA | GPIO 2 | 3 | I2C-1. Use a level shifter (see §4.3). |
-| LCD SCL | GPIO 3 | 5 | I2C-1 |
-| SPI MOSI (both RFID) | GPIO 10 | 19 | SPI0, shared bus |
-| SPI MISO (both RFID) | GPIO 9 | 21 | SPI0, shared bus |
-| SPI SCLK (both RFID) | GPIO 11 | 23 | SPI0, shared bus |
-| RFID #1 SDA/CS (Locker 1) | GPIO 8 (CE0) | 24 | |
-| RFID #2 SDA/CS (Locker 2) | GPIO 7 (CE1) | 26 | |
-| RFID #1 RST | GPIO 25 | 22 | |
-| RFID #2 RST | GPIO 24 | 18 | |
-| Relay 1 → Locker 1 solenoid | GPIO 5 | 29 | Pulled **high** at boot, so an active-LOW relay stays OFF. |
-| Relay 2 → Locker 2 solenoid | GPIO 6 | 31 | Pulled **high** at boot, so an active-LOW relay stays OFF. |
-| Coin pulse input | GPIO 17 | 11 | From the optocoupler output with internal pull-up |
-| Coin selector power gate (recommended 3rd relay) | GPIO 4 | 7 | Pulled high at boot, so the relay is OFF and the selector is disabled. |
-| Buzzer (through a transistor) | GPIO 18 | 12 | PWM-capable |
-| Door sensor Locker 1 (optional reed) | GPIO 22 | 15 | Internal pull-up, reed switch to GND |
-| Door sensor Locker 2 (optional reed) | GPIO 23 | 16 | Internal pull-up, reed switch to GND |
-| ESP32-CAM | USB port | — | Appears as `/dev/ttyUSB0` (CH340 on the USB-C base) |
+## 3. Wiring each part
 
-**Why GPIO 4, 5 and 6 for relays?** GPIO 0–8 default to pull-**up** at power-on and GPIO 9–27 default to pull-**down**. Most cheap relay modules are **active-LOW**. Putting them on pull-up pins means **no solenoid fires while the Pi boots**. If your relay module turns out to be active-HIGH, move the relays to pull-down pins (for example GPIO 26 and 27). The software will make polarity configurable.
-
-## 3. Power architecture
-
+### 3.1 Relay module → solenoid locks
 ```
-12 V adapter (≥ 3 A recommended) ──┬── Relay 1 COM → NO → Solenoid 1 (+ flyback diode) → GND
-                                   ├── Relay 2 COM → NO → Solenoid 2 (+ flyback diode) → GND
-                                   └── (Relay 3) → Coin selector +12 V
+Pi pin 2  (5V)  ── VCC          Relay COM1 ── +12 V
+Pi pin 6  (GND) ── GND          Relay NO1  ── Solenoid 1 (+)   Solenoid 1 (−) ── 12 V GND
+Pi pin 29 (GPIO5) ─ IN1         Relay COM2 ── +12 V
+Pi pin 31 (GPIO6) ─ IN2         Relay NO2  ── Solenoid 2 (+)   Solenoid 2 (−) ── 12 V GND
+Flyback diode (1N4007/1N5408) across EACH solenoid: stripe (cathode) to the + side.
+```
+- **NO** (normally open) means the lock is energised only while the relay is ON. The kiosk pulses it for `LOCK_PULSE_MS` (3 s) and never holds it, because the solenoids would overheat.
+- **3.3 V trigger check:**
+  1. Power up and run `npm run hwcheck:pi`.
+  2. At rest, both relay LEDs must be **off**.
+  3. `unlock 1` should click ON, then OFF after 3 s.
+  4. If a relay **stays on or chatters**, the board isn't fully switching off at 3.3 V. Remove the **JD-VCC jumper**, wire **VCC → Pi 3.3 V (pin 1)** and **JD-VCC → Pi 5 V (pin 2)**, and keep GND common.
+- The 12 V side never touches the Pi except through the relay contacts.
 
-Raspberry Pi 4 ← official 5.1 V / 3 A USB-C supply (recommended)
-                 or a quality 12 V → 5 V **5 A** buck converter
+### 3.2 Coin selector → PC817 → GPIO 17
+The Allan 1239 runs on 12 V. Its **COIN** wire pulses LOW once per peso (programmed: ₱1 = 1 pulse, ₱5 = 5, ₱10 = 10, ₱20 = 20). The PC817 keeps the 12 V side completely separate from the Pi.
+```
+COIN SELECTOR SIDE (12 V)                 PI SIDE (3.3 V)
++12 V ── 2.2 kΩ ── PC817 pin 1 (anode)    PC817 pin 4 (collector) ── GPIO 17 (pin 11)
+COIN wire ──────── PC817 pin 2 (cathode)  PC817 pin 3 (emitter)   ── Pi GND
+Selector GND ── 12 V GND                  (GPIO 17 uses the Pi's internal pull-up)
+```
+- **PC817 module board** (with screw terminals): wire **IN+ → +12 V** and **IN− → COIN**. On the output side, **OUT → GPIO 17** and **GND → Pi GND**. If the module has a VCC pin for its output pull-up, connect it to **3.3 V, never 5 V**.
+- Selector switches:
+  - **NO** (normally open)
+  - pulse speed **Medium or Slow**
+  - train **both** old and new ₱1/₱5/₱10 coins (plus ₱20 if accepted)
+- If a ₱5 shows up as two coins in `hwcheck:pi`, raise `COIN_PULSE_GAP_MS` to 300.
 
-All grounds common, EXCEPT across the coin-selector optocoupler (isolated by design).
+### 3.3 RC522 readers (×2, SPI)
+| RC522 pin | Reader #1 (Locker 1) | Reader #2 (Locker 2) |
+|---|---|---|
+| SDA (SS) | GPIO 8 / pin 24 | GPIO 7 / pin 26 |
+| SCK | pin 23 | pin 23 |
+| MOSI | pin 19 | pin 19 |
+| MISO | pin 21 | pin 21 |
+| IRQ | not connected | not connected |
+| GND | GND | GND |
+| RST | **3.3 V** | **3.3 V** |
+| 3.3V | pin 1 / 17 | pin 1 / 17 |
+
+- **3.3 V only.** Powering an RC522 from 5 V damages it.
+- **RST is tied to 3.3 V.** The software resets the chip itself, which saves two GPIOs compared with the earlier plan.
+- Each antenna is switched on **only while it's reading**, so the two readers don't interfere. Still keep them **≥ 10 cm apart**.
+- Mount each tag where it sits **flat over its reader** when the calculator is stowed. Batteries and metal reduce range.
+
+### 3.4 16×2 LCD (I2C backpack)
+```
+LCD GND ── Pi GND     LCD VCC ── Pi 5 V (pin 4)
+LCD SDA ── GPIO 2 (pin 3)     LCD SCL ── GPIO 3 (pin 5)
+```
+- The backpack pulls SDA and SCL up to **5 V**. Use a **BSS138 level shifter**, or remove the backpack's two pull-up resistors. The Pi has its own 3.3 V pull-ups.
+- Find the address with `i2cdetect -y 1`. It's usually `27` or `3f`; set `LCD_I2C_ADDRESS` to match.
+- Blank or solid blocks: turn the **blue contrast potentiometer** on the backpack.
+
+### 3.5 Buzzer
+- **Active buzzer module** (VCC/GND/I/O): I/O to GPIO 18 (pin 12), VCC to 3.3 V or 5 V as the module requires, GND to GND.
+  - If it beeps constantly when idle, it's "low level trigger": set `BUZZER_ACTIVE_LOW=true`.
+- **Bare buzzer** drawing more than about 15 mA: drive it through an NPN transistor (2N2222 plus a 1 kΩ base resistor). Don't drive it from the pin directly.
+
+### 3.6 ESP32-CAM (QR scanner)
+- Plug its USB-C base into a Pi USB port. It shows up as `/dev/ttyUSB0`.
+- A path that never changes is `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` (check with `ls /dev/serial/by-id/`). Put it in `SCANNER_PORT`.
+
+## 4. Power
+```
+12 V adapter (≥3 A) ──┬── Relay COM1/COM2 → solenoids (flyback diodes!)
+                      └── Coin selector +12 V / GND
+5.1 V 3 A USB-C ──────── Raspberry Pi (its 5 V pins feed relay module + LCD)
+Common ground: Pi GND ↔ relay module GND ↔ LCD GND ↔ RC522 GND.
+The 12 V ground and the Pi ground meet only where needed. The PC817 keeps the coin signal isolated.
+```
+Only one locker is ever unlocked at a time (Rule 4), so the 12 V adapter powers one solenoid plus the coin selector.
+
+## 5. Raspberry Pi setup (once)
+On Raspberry Pi OS (64-bit, Bookworm or newer):
+```bash
+sudo raspi-config nonint do_spi 0
+sudo raspi-config nonint do_i2c 0
+sudo apt update
+sudo apt install -y git i2c-tools python3-gpiozero python3-lgpio python3-spidev python3-smbus2
+sudo usermod -aG gpio,spi,i2c,dialout $USER
+sudo reboot
+```
+Install **Node.js 22 LTS** (follow nodejs.org → "Download Node.js" for Linux/ARM64, or the NodeSource instructions), then:
+```bash
+git clone https://github.com/adrianabaja18/calculator-rental.git
+cd calculator-rental
+npm ci
+cp apps/raspberry-pi/.env.example apps/raspberry-pi/.env
+nano apps/raspberry-pi/.env
+```
+In `.env` set:
+- `HARDWARE_MODE=real`
+- `QR_SCANNER=serial`
+- `SCANNER_PORT=/dev/ttyUSB0`
+- `BACKEND_URL` = your laptop's `http://<laptop-ip>:3000`, or the deployed site
+
+## 6. Bring-up, one part at a time
+```bash
+npm run hwcheck:pi
+```
+The tool prints which devices it found, then accepts commands. Work through it in this order:
+
+| Step | Type | Expect |
+|---|---|---|
+| 1. LCD | `lcd HELLO` | text on the LCD (adjust contrast if blank) |
+| 2. Buzzer | `beep error` | three short beeps |
+| 3. Relays | `unlock 1`, `unlock 2` | that relay clicks ON, then OFF after 3 s, and the solenoid pulls |
+| 4. RFID | `watch`, then place/remove each calculator over its reader | `RFID reader 1: tag 04-…` / `no tag` |
+| 5. Coins | insert ₱1, ₱5, ₱10, ₱20 | `COIN: 5 pulse(s) = P5`, … |
+
+**Write down the two tag UIDs from step 4.** They go into the dashboard (**Calculators → Edit → RFID tag UID**) and into the kiosk's local database (Phase 12 sync will do this automatically; until then, edit `apps/raspberry-pi/src/db/dev-seed.ts` or re-seed).
+
+Then run the whole kiosk:
+```bash
+npm run seed:pi
+```
+```bash
+npm run start:pi
 ```
 
-- **Flyback diode** (1N4007, or 1N5408 for large solenoids) across each solenoid, cathode to +12 V. Without it the inductive kick can reset the Pi, weld relay contacts, or corrupt the SD card.
-- **Pulse the solenoid, don't hold it.** Most 12 V cabinet solenoid locks are not rated for continuous duty and overheat. The software energizes the lock for a few seconds (configurable, about 3–5 s). The student opens the door during that window, and the slanted latch re-locks when the door is pushed shut.
-- Only **one** locker is ever unlocked at a time (Rule 4), so the adapter only has to supply one solenoid plus the coin selector.
-- A separate supply for the Pi avoids under-voltage resets when a solenoid switches.
+## 7. Troubleshooting
+| Symptom | Likely cause / fix |
+|---|---|
+| `Hardware bridge did not start` | Python packages missing (step 5), or run `python3 apps/raspberry-pi/hw-bridge/hw_bridge.py --help` to see the error |
+| `RFID reader 2 not available: no answer on SPI0.1` | SPI not enabled, a wrong SS wire, or the reader is on 5 V. Check `ls /dev/spidev0.*` shows two devices |
+| `LCD not available at 0x27` | Wrong address (`i2cdetect -y 1`) or I2C not enabled |
+| Relay stays on | See the 3.3 V trigger check in §3.1 |
+| No coins counted | NO/NC switch, PC817 orientation (pin 1 dot = anode), or the 12 V supply |
+| A coin counted as two | Raise `COIN_PULSE_GAP_MS` to 300 |
+| Permission errors on GPIO/SPI/I2C | You skipped `usermod -aG gpio,spi,i2c,dialout` + reboot |
 
-## 4. Component-specific notes
-
-### 4.1 Allan 1239 Pro Max coin selector (important)
-- **The coin signal must not go straight into a Pi GPIO.** The selector runs on 12 V. Depending on the unit and the NO/NC switch, the COIN line may be open-collector or pulled up internally. Any voltage above 3.3 V destroys a GPIO. **Recommended:** a PC817 optocoupler module between the COIN output and GPIO 17. Measure the COIN line with a multimeter before connecting anything.
-- **Program pulses equal to the peso value:** ₱1 = 1 pulse, ₱5 = 5 pulses, ₱10 = 10 pulses. Software then counts pulses and finalizes a coin after a quiet gap of about 200 ms.
-- **Pulse speed:** set the selector to the *medium* or *slow* pulse width for reliable edge detection on Linux.
-- **Train both coin series.** Old BSP-series and new NGC-series ₱1, ₱5 and ₱10 coins differ in size and alloy. Use the selector's sample-learning mode for both versions of each accepted denomination (up to the number of coin channels your unit supports).
-- **Enable it only during payment.** The specification says "enable coin acceptor" in the PAYMENT_PENDING state. With only 2 relays (both used by the locks), the selector is always on, so a coin inserted while the kiosk is idle would be swallowed. **Recommended:** use a 3rd relay channel to switch the selector's 12 V (GPIO 4 above). If that is not possible, the software logs such coins as `UNATTRIBUTED_COIN` events so officers can refund them.
-
-### 4.2 RFID readers (two on one SPI bus)
-- Both readers share MOSI, MISO and SCLK. Each has its own chip-select (CE0 / CE1) and RST.
-- RC522 boards are **3.3 V only**. Power them from the Pi's 3.3 V pin, never 5 V.
-- **Presence detection:** the software polls each reader every ~200–300 ms with a wake-up request. "Tag present" means the expected UID was read recently, and "removed" means N consecutive polls missed. This gives the *removal confirmed* (Rule 7) and *return verified* (Rule 8) signals.
-- **Interference:** keep the two antennas at least about 10 cm apart, or poll them alternately with the antenna of the idle reader turned off.
-- **Mounting:** stick the tag where it sits flat over the reader when the calculator is stowed. Batteries and metal reduce range, so test the read distance with the calculator in place.
-
-### 4.3 I2C LCD (PCF8574 backpack)
-- The backpack is normally powered at 5 V (needed for LCD contrast) and has pull-up resistors to **5 V** on SDA and SCL. The Pi's I2C pins are 3.3 V. **Recommended:** a BSS138 bidirectional level shifter, or remove the backpack's pull-ups.
-- Common addresses are `0x27` or `0x3F`. Check with `i2cdetect -y 1` in Phase 11.
-- A **16×2** LCD fits 16 characters per line, so all kiosk messages are written to fit (for example `Return by 12:00PM` becomes `Due: 12:00 PM`). Tell us if yours is 20×4.
-
-### 4.4 ESP32-CAM + OV2640 (USB-C base)
-- Connect the base's USB-C to a Pi USB port. This provides both power and serial.
-- Wi-Fi stays **off** on the ESP32. It only decodes QR codes and prints one JSON line per scan.
-- Opening the serial port can toggle DTR/RTS and **reset** the ESP32. The Pi service handles this at startup in Phase 10.
-- The on-board flash LED (GPIO 4 on the ESP32) can be dimmed with PWM to light the ID for scanning.
-
-## 5. Open questions to confirm before Phase 10 and 11
-
-1. **RFID reader model.** This plan assumes MFRC522 (RC522, 13.56 MHz, SPI). If they are **125 kHz** readers (for example RDM6300 over UART), they only report a tag once when it arrives and **cannot report removal**. That changes the design.
-2. **Relay module polarity:** active-LOW or active-HIGH? Many modules have an `IN` LED that lights when the input is pulled LOW.
-3. **LCD size:** 16×2 or 20×4?
-4. **Student ID QR content.** Scan your school ID with a phone QR app. Is the result just the student number, a URL, or text with name and course? Redact real data before sharing. The QR parser is built around this.
-5. Can you add a **3rd relay** (coin selector power) and **2 reed switches** (door sensors)? Both are cheap and make the system much more robust.
-
-## 6. Raspberry Pi OS setup (preview; full steps in Phase 9)
-- Raspberry Pi OS Lite (64-bit), Node.js 22 LTS, `raspi-config` → enable **I2C** and **SPI**.
-- Install only the Pi workspace: `npm install --workspace @calc-rental/raspberry-pi`.
-- Run the kiosk as a `systemd` service with `Restart=always`. SQLite lives at `/var/lib/calc-kiosk/kiosk.db`.
+## 8. Still open
+- **RTC (DS3231):** deferred. Without it, the kiosk waits for internet time after each boot.

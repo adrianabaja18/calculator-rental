@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-19, end of **Phase 10** (ESP32-CAM QR scanner)
+> **Last updated:** 2026-11-19, end of **Phase 11** (real hardware drivers)
 
 ---
 
@@ -45,9 +45,9 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 7 | Return rules, RFID verification, penalty engine, Settings page | ✅ Done and verified |
 | 8 | Realtime dashboard: summary cards, Active Rentals countdowns, live updates | ✅ Done and verified |
 | 9 | Raspberry Pi service: state machine, mock hardware, 16×2 LCD messages, device login + heartbeat | ✅ Done and verified |
-| 10 | ESP32-CAM QR firmware + serial link | ✅ Built and tested in software. ⏳ Flash and test on the board (§6). |
-| 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer | ⬜ Next |
-| 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ⬜ |
+| 10 | ESP32-CAM QR firmware + serial link | ✅ Done and verified on the real board |
+| 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer (Python helper) | ✅ Built and tested in software. ⏳ Bring-up on the Pi (§6). |
+| 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ⬜ Next |
 | 13 | Error handling, audit logs, device monitoring | ⬜ |
 | 14 | Testing, simulator, system validation | ⬜ |
 | 15 | Deployment and final documentation | ⬜ |
@@ -62,11 +62,11 @@ These block later phases. Whoever has the hardware, please fill them in.
 
 | # | Item | Needed by | Status |
 |---|---|---|---|
-| 1 | Relay module polarity: **active-LOW or active-HIGH**? (Does the IN LED light when the pin is pulled LOW?) | Phase 11 | ⏳ **Deferred, reminder pending** |
+| 1 | Relay module polarity | — | ✅ **Active-LOW** (ACE 6345 2-channel optocoupler board), GPIO 5/6 |
 | 2 | LCD size | — | ✅ **16×2** (confirmed 2026-11-17); all messages fit 16 characters |
-| 3 | Add a **3rd relay** to switch the coin selector's 12 V power? Otherwise coins inserted while idle are swallowed. | Phase 11 | Recommended, not decided |
-| 4 | Add **2 reed switches** (door sensors)? | Phase 11 | Recommended, not decided |
-| 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 (update seed/inventory) | Not collected yet |
+| 3 | 3rd relay for the coin selector | — | ✅ **Not fitted** (idle coins are logged for refund) |
+| 4 | Door reed switches | — | ✅ **Not fitted** (returns complete on RFID; `DOOR_PINS` adds them later) |
+| 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 bring-up | ⏳ Read them with `npm run hwcheck:pi` → `watch` |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
 | — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, keeps counting overnight, **paid before the return locker opens** (2026-11-18). Editable on the Settings page. |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
@@ -118,7 +118,7 @@ The Pi `.env` defaults work on a laptop.
 | Command | Expected result |
 |---|---|
 | `npm run typecheck` | No errors |
-| `npm test` | All tests pass (287 at the end of Phase 10) |
+| `npm test` | All tests pass (294 at the end of Phase 11) |
 | `npm run dev:web`, then open http://localhost:3000 | Redirects to the login page. After signing in, the Dashboard's system check cards are green. |
 | `npm run check:pi` (second terminal, web running) | `SYSTEM CHECK PASSED` |
 
@@ -158,7 +158,55 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 10 hand-off: ESP32-CAM QR scanner
+## 6. Phase 11 hand-off: real hardware drivers
+
+### Decisions (2026-11-19)
+- **Hardware I/O through a small Python helper** (`apps/raspberry-pi/hw-bridge/hw_bridge.py`), chosen by the team over pure TypeScript.
+  - It uses the Pi's official, preinstalled **gpiozero** library, plus spidev and smbus2. Nothing needs compiling, and it copes with GPIO changes in newer kernels.
+  - Node keeps **all** rules and the state machine. The helper only performs I/O, over JSON lines like the ESP32.
+- **Relay board:** ACE 6345 2-channel optocoupler, **active-LOW**, on GPIO 5/6. Those pins are HIGH at boot, so the locks can't fire while the Pi starts.
+- **Coin signal:** through a **PC817** optocoupler to GPIO 17.
+- **No 3rd relay and no door reed switches.** Idle coins are logged for refund, and returns complete on the RFID check. Either can be added later with `.env` settings.
+- **RC522 RST pins tied to 3.3 V.** The driver resets the chip in software, saving 2 GPIOs.
+
+### Built
+- **`hw_bridge.py`**:
+  - **Relays:** pulsed for `LOCK_PULSE_MS`, never held.
+  - **Coins:** pulses are counted and grouped next to the pin (a 200 ms gap ends a coin).
+  - **RC522 driver:** reads 4- and 7-byte UIDs, and turns each antenna on only while reading, so two readers don't interfere.
+  - **16×2 LCD driver** for the PCF8574 backpack.
+  - **Buzzer patterns** (ok, error, attention).
+  - **Optional door switches.**
+  - A missing device is reported, not fatal.
+  - **`--mock` mode** for laptops and tests.
+- **Node side** (`src/hardware/real/`):
+  - `BridgeClient`: starts the helper, gives each request an id and a 2 s timeout, and restarts the helper if it crashes.
+  - Adapters for the kiosk interfaces: coins, RFID, locks, display, buzzer.
+  - `SystemClock`: trusts the clock once `timedatectl` says NTP is synced.
+- **Kiosk modes:**
+  - `HARDWARE_MODE=real` runs on the Pi's pins, plus the ESP32 scanner.
+  - `mock` stays the laptop console.
+  - Every pin and polarity is a `.env` setting (`RELAY_PINS`, `RELAY_ACTIVE_LOW`, `COIN_PIN`, `COIN_PULSE_GAP_MS`, `BUZZER_PIN`, `BUZZER_ACTIVE_LOW`, `RFID_SPI`, `LCD_I2C_ADDRESS`, `DOOR_PINS`, `LOCK_PULSE_MS`).
+- **`npm run hwcheck:pi`:** a bring-up tool that tests each part on its own (`lcd`, `beep`, `unlock 1`, `rfid`, `watch`), and prints coins as they're inserted.
+- **`docs/raspberry-pi.md`** is rewritten for your exact parts: pin map, wiring per component (relay 3.3 V trigger check, PC817 coin wiring, RC522 ×2, LCD level shifting, buzzer), power, Pi setup commands, bring-up order and troubleshooting.
+- 7 new integration tests run the **real Python helper** (mock mode) through the Node adapters, including a complete kiosk borrow where coins and RFID go through Python. 294 in total. CI runs them too.
+
+### ⚠️ Needs the real Pi
+The RC522 and LCD drivers and the GPIO wiring can only be proven on the hardware. Follow `docs/raspberry-pi.md` §5–6, and send me any error the hardware check prints.
+
+### Phase 11 verification checklist (on the Raspberry Pi)
+- [ ] §5 setup done: SPI and I2C enabled, Python packages installed, user in the gpio/spi/i2c/dialout groups, rebooted
+- [ ] `ls /dev/spidev0.*` shows two devices; `i2cdetect -y 1` shows the LCD (27 or 3f)
+- [ ] `npm run hwcheck:pi` lists devices with `rfid: [1, 2]` and `lcd: true`
+- [ ] `lcd HELLO` shows on the LCD; `beep error` gives three beeps
+- [ ] `unlock 1` and `unlock 2`: each relay clicks ON, then OFF after 3 s, and its solenoid pulls. At rest both relay LEDs are **off**.
+- [ ] `watch`: putting CALC-001 over reader 1 prints `tag 04-…`, and removing it prints `no tag`. Same for reader 2. **Write both UIDs down.**
+- [ ] Coins ₱1/₱5/₱10/₱20 print `COIN: 1/5/10/20 pulse(s)`
+- [ ] Put the real UIDs on the dashboard (Calculators → Edit) and in the kiosk seed. Then `HARDWARE_MODE=real npm run start:pi`, and do a full borrow and return with your ID, coins, and the real lockers.
+
+---
+
+## 6.0f Phase 10 hand-off (completed): ESP32-CAM QR scanner
 
 ### Built
 - **Firmware** at `firmware/esp32-cam/esp32-cam-qr/esp32-cam-qr.ino` (Arduino, AI-Thinker ESP32-CAM + OV2640 on the USB-C CH340 base):
@@ -649,6 +697,7 @@ calculator-rental-system/
 | `npm run check:pi` | Pi system check: SQLite + backend |
 | `npm run demo:pi` | Demo: a full borrow with coin payment and the refusal cases on a throwaway database, printed as LCD screens |
 | `npm run scanner:pi` | List serial ports. Add `-- COM7` to print scans from the ESP32-CAM |
+| `npm run hwcheck:pi` | Hardware bring-up on the Pi: `lcd`, `beep`, `unlock 1`, `rfid`, `watch`, coin counting. Add `-- --mock` on a laptop. |
 | `npm run seed:pi` | Load the fake development data into the kiosk's SQLite file. Add `-- --sensors-ready` to simulate both calculators detected. |
 | `npm run typecheck` | Type-check everything |
 | `npm test` | All tests |
