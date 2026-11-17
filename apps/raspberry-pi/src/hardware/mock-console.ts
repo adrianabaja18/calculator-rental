@@ -50,7 +50,7 @@ export function startMockConsole(opts: {
   const rl = readline.createInterface({ input: process.stdin });
   rl.on('line', (line) => {
     const [cmd = '', a, b] = line.trim().toLowerCase().split(/\s+/);
-    if (STUDENTS[cmd]) return hw.scanner.scan(STUDENTS[cmd]);
+    if (STUDENTS[cmd]) return void kiosk.handleScan(STUDENTS[cmd]); // works with the real scanner too
     switch (cmd) {
       case 'coin':
         return hw.coins.insert(Number(a));

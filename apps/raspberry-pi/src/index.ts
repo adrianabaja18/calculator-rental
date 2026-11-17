@@ -5,6 +5,8 @@ import { config } from './config';
 import { KioskStore } from './db/kiosk-store';
 import { getLocalConfig, getSchemaVersion, openLocalDatabase, setLocalConfig } from './db/sqlite';
 import { createMockHardware } from './hardware/mock';
+import { SerialQRScanner } from './hardware/real/serial-qr-scanner';
+import type { Hardware } from './hardware/types';
 import { printLcd, startMockConsole } from './hardware/mock-console';
 import { KioskController } from './kiosk/kiosk-controller';
 import { logger } from './logger';
@@ -63,11 +65,19 @@ async function main(): Promise<void> {
   const rentals = new RentalService(store, { deviceCode: config.DEVICE_ID, now });
   const payments = new PaymentService(store, rentals, { now });
   const returns = new ReturnService(store, payments, { now });
-  const kiosk = new KioskController(store, hw, { rentals, payments, returns }, {
+  // Phase 10: the real ESP32-CAM scanner can replace the mock one; everything else stays simulated until Phase 11.
+  const serialScanner =
+    config.QR_SCANNER === 'serial'
+      ? new SerialQRScanner(config.SCANNER_PORT, (level, message, data) => logger[level]({ event: 'QR_SCANNER', ...data }, message))
+      : null;
+  const hardware: Hardware = { ...hw, scanner: serialScanner ?? hw.scanner };
+
+  const kiosk = new KioskController(store, hardware, { rentals, payments, returns }, {
     now,
     log: (level, message, data) => logger[level]({ event: 'KIOSK', ...data }, message),
   });
   await kiosk.start();
+  serialScanner?.start();
   const ticker = setInterval(() => void kiosk.tick(), TICK_MS);
   const console_ = startMockConsole({ hw, kiosk, store, addMinutes: (m) => (offsetMs += m * 60_000) });
 
@@ -107,12 +117,16 @@ async function main(): Promise<void> {
     clearInterval(ticker);
     clearInterval(connectivity);
     console_.close();
+    serialScanner?.stop();
     db.close(); // checkpoints the WAL; safe to power off afterwards
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-  logger.info({ event: 'SERVICE_READY' }, 'Kiosk running in MOCK mode. Type "help" for controls, Ctrl+C to stop.');
+  logger.info(
+    { event: 'SERVICE_READY', qrScanner: config.QR_SCANNER === 'serial' ? config.SCANNER_PORT : 'mock' },
+    'Kiosk running (mock coins/RFID/locks). Type "help" for controls, Ctrl+C to stop.',
+  );
 }
 
 main().catch((error: unknown) => {

@@ -21,6 +21,9 @@ const ConfigSchema = z.object({
   DEVICE_SECRET: z.string().min(16, { message: 'DEVICE_SECRET must be at least 16 characters' }),
   SQLITE_PATH: z.string().min(1).default('./data/kiosk.db'),
   HARDWARE_MODE: z.enum(['mock', 'real']).default('mock'),
+  /** mock = keyboard console; serial = ESP32-CAM on SCANNER_PORT (Phase 10). */
+  QR_SCANNER: z.enum(['mock', 'serial']).default('mock'),
+  SCANNER_PORT: z.string().min(1).default('/dev/ttyUSB0'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   LOG_PRETTY: booleanString,
   HTTP_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(8000),
