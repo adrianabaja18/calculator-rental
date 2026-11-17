@@ -214,10 +214,12 @@ export class PaymentService {
    * can't be returned by the selector, so they're flagged for an officer refund.
    * Call periodically (the kiosk state machine does this in Phase 9).
    */
-  expireSessions(): { expired: number } {
+  expireSessions(options: { all?: boolean } = {}): { expired: number } {
     const nowIso = this.now().toISOString();
     let expired = 0;
-    for (const payment of this.store.listExpiredPaymentSessions(nowIso)) {
+    // all: after a restart nobody can still be mid-payment, so close every open session.
+    const cutoff = options.all ? '9999-12-31T00:00:00.000Z' : nowIso;
+    for (const payment of this.store.listExpiredPaymentSessions(cutoff)) {
       this.store.transaction(() => {
         if (!this.store.updatePayment(payment.id, payment.status, { status: PaymentStatus.CANCELLED, updated_at: nowIso })) return;
         expired += 1;
