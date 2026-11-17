@@ -288,6 +288,16 @@ export class KioskStore {
       });
   }
 
+  /** Locker ↔ hardware channel ↔ expected tag, for the sensor loop. */
+  listLockerHardware(): Array<{ id: string; channel: number; number: number; expectedUid: string | null }> {
+    return this.db
+      .prepare(
+        `SELECT l.id, l.hardware_channel AS channel, l.locker_number AS number, c.rfid_uid AS expectedUid
+         FROM lockers l LEFT JOIN calculators c ON c.locker_id = l.id ORDER BY l.locker_number`,
+      )
+      .all() as Array<{ id: string; channel: number; number: number; expectedUid: string | null }>;
+  }
+
   setCalculatorStatus(calculatorId: string, status: CalculatorStatus, nowIso: string): void {
     this.db.prepare('UPDATE calculators SET status = ?, updated_at = ? WHERE id = ?').run(status, nowIso, calculatorId);
   }
@@ -376,6 +386,12 @@ export class KioskStore {
         .prepare(`SELECT * FROM rentals WHERE student_id = ? AND status IN ('ACTIVE', 'OVERDUE', 'RETURNING')`)
         .get(studentId) as RentalRecord) ?? null
     );
+  }
+
+  listRentalsInStatus(statuses: readonly RentalStatus[]): RentalRecord[] {
+    return this.db
+      .prepare(`SELECT * FROM rentals WHERE status IN (${statuses.map(() => '?').join(', ')})`)
+      .all(...statuses) as RentalRecord[];
   }
 
   listActiveRentalsPastDue(nowIso: string): RentalRecord[] {
