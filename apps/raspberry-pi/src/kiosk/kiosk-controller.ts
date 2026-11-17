@@ -400,7 +400,7 @@ export class KioskController {
 
   private move(to: KioskState) {
     if (!canMove(this.state, to)) throw new Error(`Kiosk cannot go from ${this.state} to ${to}`);
-    this.log('info', `Kiosk ${this.state} → ${to}`, { rentalId: this.flow?.rentalId });
+    this.log('info', `Kiosk ${this.state} -> ${to}`, { rentalId: this.flow?.rentalId });
     this.state = to;
   }
 
