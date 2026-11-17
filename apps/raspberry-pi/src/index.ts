@@ -1,4 +1,5 @@
-import { APP_VERSION } from '@calc-rental/shared';
+import fs from 'node:fs';
+import { APP_VERSION, HEARTBEAT_INTERVAL_SECONDS, MAX_CLOCK_DRIFT_SECONDS } from '@calc-rental/shared';
 import { BackendClient } from './backend/client';
 import { config } from './config';
 import { KioskStore } from './db/kiosk-store';
@@ -17,12 +18,20 @@ import { ReturnService } from './rental/return-service';
  *   1. validates configuration and opens the local SQLite database (main DB),
  *   2. builds the hardware (mock now; real GPIO/SPI/I2C/serial in Phases 10–11),
  *   3. runs the kiosk state machine (tick every 250 ms),
- *   4. checks backend connectivity (heartbeat + sync arrive in Phases 9c/12),
+ *   4. sends a heartbeat every 30 s (device-authenticated; sync arrives in Phase 12),
  *   5. shuts down cleanly on Ctrl+C / systemd stop.
  */
 
 const TICK_MS = 250;
-const CONNECTIVITY_INTERVAL_MS = 60_000;
+
+/** Raspberry Pi CPU temperature in °C, or null on other machines. */
+function readCpuTemperature(): number | null {
+  try {
+    return Number(fs.readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8')) / 1000;
+  } catch {
+    return null;
+  }
+}
 
 async function main(): Promise<void> {
   logger.info({ event: 'SERVICE_STARTING', version: APP_VERSION, hardwareMode: config.HARDWARE_MODE }, 'Kiosk service starting');
@@ -62,18 +71,33 @@ async function main(): Promise<void> {
   const ticker = setInterval(() => void kiosk.tick(), TICK_MS);
   const console_ = startMockConsole({ hw, kiosk, store, addMinutes: (m) => (offsetMs += m * 60_000) });
 
-  const backend = new BackendClient({ baseUrl: config.BACKEND_URL, timeoutMs: config.HTTP_TIMEOUT_MS });
+  const backend = new BackendClient({
+    baseUrl: config.BACKEND_URL,
+    timeoutMs: config.HTTP_TIMEOUT_MS,
+    deviceId: config.DEVICE_ID,
+    deviceSecret: config.DEVICE_SECRET,
+  });
   let backendOnline: boolean | null = null;
-  const checkBackend = async () => {
-    const result = await backend.getHealth();
+  const heartbeat = async () => {
+    const result = await backend.heartbeat({
+      softwareVersion: APP_VERSION,
+      kioskState: kiosk.state,
+      syncQueueCount: store.pendingSyncCount(),
+      localDbOk: db.pragma('quick_check', { simple: true }) === 'ok',
+      cpuTempC: readCpuTemperature(),
+      sentAt: now().toISOString(),
+    });
     if (result.ok !== backendOnline) {
-      if (result.ok) logger.info({ event: 'DEVICE_ONLINE', latencyMs: result.latencyMs }, 'Backend reachable');
+      if (result.ok) logger.info({ event: 'DEVICE_ONLINE', latencyMs: result.latencyMs }, 'Backend reachable, heartbeat accepted');
       else logger.warn({ event: 'DEVICE_OFFLINE', code: result.code }, `${result.message} (kiosk keeps working offline)`);
       backendOnline = result.ok;
     }
+    if (result.ok && Math.abs(result.data.clockDriftSeconds) > MAX_CLOCK_DRIFT_SECONDS) {
+      logger.warn({ event: 'SYSTEM_ERROR', clockDriftSeconds: result.data.clockDriftSeconds }, 'Kiosk clock differs from the server');
+    }
   };
-  await checkBackend();
-  const connectivity = setInterval(() => void checkBackend(), CONNECTIVITY_INTERVAL_MS);
+  await heartbeat();
+  const connectivity = setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL_SECONDS * 1000);
 
   let shuttingDown = false;
   const shutdown = (signal: string) => {

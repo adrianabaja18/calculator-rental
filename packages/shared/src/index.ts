@@ -13,3 +13,4 @@ export * from './qr';
 export * from './roles';
 export * from './rental';
 export * from './payment/coins';
+export * from './device';
