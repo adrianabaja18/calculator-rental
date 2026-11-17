@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-19, end of **Phase 9** (kiosk service: state machine, mock hardware, device login)
+> **Last updated:** 2026-11-19, end of **Phase 10** (ESP32-CAM QR scanner)
 
 ---
 
@@ -44,9 +44,9 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ✅ Done and verified |
 | 7 | Return rules, RFID verification, penalty engine, Settings page | ✅ Done and verified |
 | 8 | Realtime dashboard: summary cards, Active Rentals countdowns, live updates | ✅ Done and verified |
-| 9 | Raspberry Pi service: state machine, mock hardware, 16×2 LCD messages, device login + heartbeat | ✅ Built and tested. ⏳ Checklist pending (§6). |
-| 10 | ESP32-CAM QR firmware + serial link | ⬜ Next |
-| 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer | ⬜ |
+| 9 | Raspberry Pi service: state machine, mock hardware, 16×2 LCD messages, device login + heartbeat | ✅ Done and verified |
+| 10 | ESP32-CAM QR firmware + serial link | ✅ Built and tested in software. ⏳ Flash and test on the board (§6). |
+| 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer | ⬜ Next |
 | 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ⬜ |
 | 13 | Error handling, audit logs, device monitoring | ⬜ |
 | 14 | Testing, simulator, system validation | ⬜ |
@@ -118,7 +118,7 @@ The Pi `.env` defaults work on a laptop.
 | Command | Expected result |
 |---|---|
 | `npm run typecheck` | No errors |
-| `npm test` | All tests pass (272 at the end of Phase 9) |
+| `npm test` | All tests pass (287 at the end of Phase 10) |
 | `npm run dev:web`, then open http://localhost:3000 | Redirects to the login page. After signing in, the Dashboard's system check cards are green. |
 | `npm run check:pi` (second terminal, web running) | `SYSTEM CHECK PASSED` |
 
@@ -158,7 +158,39 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 9 hand-off: kiosk service (state machine, mock hardware, device login)
+## 6. Phase 10 hand-off: ESP32-CAM QR scanner
+
+### Built
+- **Firmware** at `firmware/esp32-cam/esp32-cam-qr/esp32-cam-qr.ino` (Arduino, AI-Thinker ESP32-CAM + OV2640 on the USB-C CH340 base):
+  - decodes QR codes with the `ESP32QRCodeReader` library
+  - **Wi-Fi and Bluetooth are off**
+  - sends one JSON line per message at 115200 baud: `hello` at boot, `alive` every 5 s, and `qr` with the raw text, TABs escaped
+  - all serial output comes from one task, so lines can't mix
+  - the step-by-step setup, flashing and testing guide is `firmware/esp32-cam/README.md`
+- **Pi driver** (`apps/raspberry-pi/src/hardware/real/`):
+  - `scanner-protocol.ts` validates each line. It ignores boot noise and malformed or oversized data, and drops the same ID seen again within 3 s.
+  - `serial-qr-scanner.ts` opens the port and releases DTR/RTS, which otherwise reset the board on the CH340 base. It warns once and retries every 3 s if the cable is unplugged.
+- **Scanner test tool:**
+  - `npm run scanner:pi` lists serial ports and flags the CH340.
+  - `npm run scanner:pi -- COM7` prints every scan, and whether it's a valid school ID.
+- **Kiosk switch:** in `apps/raspberry-pi/.env`, set `QR_SCANNER=serial` and `SCANNER_PORT=COM7` (Pi: `/dev/ttyUSB0`). The kiosk keeps running even if the scanner is missing. Console shortcuts (`juan`, …) still work.
+- 15 new tests: the protocol, plus the serial driver against the official serialport mock (split reads, DTR/RTS release, reconnect). 287 in total.
+
+### ⚠️ Needs your hardware
+The firmware couldn't be compiled or flashed here. Its first real test is the checklist below. If the Arduino IDE reports compile errors, send them over. The most likely cause is the ESP32 core version: use **2.0.17** if 3.x fails.
+
+### Phase 10 verification checklist
+- [ ] `npm test` reports **287 passed**
+- [ ] Flash the ESP32-CAM (`firmware/esp32-cam/README.md` steps 1–2)
+- [ ] Arduino Serial Monitor at 115200 shows `{"type":"hello","fw":"1.0.0"}`, then an `alive` line every 5 s
+- [ ] Your school ID at about 15 cm prints `{"type":"qr",…,"data":"NAME\t2022…\tBSCpE"}`
+- [ ] Close the Serial Monitor. Then `npm run scanner:pi -- COMx` shows **✔ valid school ID** for your card
+- [ ] `QR_SCANNER=serial` + `SCANNER_PORT=COMx` in the Pi `.env`, then `npm run start:pi`: scanning your ID shows **YOUR NAME / P20 / 3 HOURS** (a first-time student is registered automatically)
+- [ ] Unplug the ESP32 while the kiosk runs: one "QR scanner unavailable" warning, and the kiosk keeps running. Plug it back in: "QR scanner connected".
+
+---
+
+## 6.0e Phase 9 hand-off (completed): kiosk service (state machine, mock hardware, device login)
 
 Delivered as **three PRs**:
 - **9a** `phase-9a/lcd-hardware-mocks`: LCD messages and hardware interfaces
@@ -616,6 +648,7 @@ calculator-rental-system/
 | `npm run start:pi` | Pi kiosk service without auto-restart: use this for the **mock keyboard console** (`juan`, `coin 20`, `take 1`, `wait 240`, …) |
 | `npm run check:pi` | Pi system check: SQLite + backend |
 | `npm run demo:pi` | Demo: a full borrow with coin payment and the refusal cases on a throwaway database, printed as LCD screens |
+| `npm run scanner:pi` | List serial ports. Add `-- COM7` to print scans from the ESP32-CAM |
 | `npm run seed:pi` | Load the fake development data into the kiosk's SQLite file. Add `-- --sensors-ready` to simulate both calculators detected. |
 | `npm run typecheck` | Type-check everything |
 | `npm test` | All tests |

@@ -4,7 +4,7 @@
 
 Students scan their school-ID QR code at the kiosk, pay with coins, and the Raspberry Pi unlocks the locker holding an available RFID-tagged calculator. Returns are verified by RFID. Organization officers monitor and manage everything from a web dashboard.
 
-> **Current status: Phase 9 complete** (kiosk state machine on mock hardware, 16×2 LCD, device heartbeat). The full README is completed in Phase 15.
+> **Current status: Phase 10 complete** (ESP32-CAM QR scanner firmware and Pi serial driver). The full README is completed in Phase 15.
 > **New to the project? Start with [docs/onboarding.md](docs/onboarding.md).**
 
 | Document | Contents |

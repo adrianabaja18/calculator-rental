@@ -2,7 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      // @serialport/binding-mock ships types its package "exports" doesn't expose (test-only dependency).
+      "@serialport/binding-mock": ["../../node_modules/@serialport/binding-mock/dist/index.d.ts"]
+    }
   },
   "include": ["src/**/*.ts", "scripts/**/*.ts"]
 }
