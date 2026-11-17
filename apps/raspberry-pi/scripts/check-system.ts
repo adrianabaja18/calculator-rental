@@ -91,7 +91,12 @@ function checkSqlite(): void {
 
 async function checkBackend(): Promise<void> {
   console.log('\n3) Backend API');
-  const client = new BackendClient({ baseUrl: config.BACKEND_URL, timeoutMs: config.HTTP_TIMEOUT_MS });
+  const client = new BackendClient({
+    baseUrl: config.BACKEND_URL,
+    timeoutMs: config.HTTP_TIMEOUT_MS,
+    deviceId: config.DEVICE_ID,
+    deviceSecret: config.DEVICE_SECRET,
+  });
   const result = await client.getHealth();
 
   if (!result.ok) {
@@ -112,6 +117,23 @@ async function checkBackend(): Promise<void> {
 
   const admin = report.checks.supabaseAdmin;
   record('Backend → Supabase (service role)', admin.status === 'ok' ? 'PASS' : 'WARN', admin.message);
+
+  // Device login: the kiosk's DEVICE_ID + DEVICE_SECRET must be accepted (records a heartbeat).
+  const beat = await client.heartbeat({
+    softwareVersion: APP_VERSION,
+    kioskState: 'SYSTEM_CHECK',
+    syncQueueCount: 0,
+    localDbOk: true,
+    cpuTempC: null,
+    sentAt: new Date().toISOString(),
+  });
+  record(
+    'Device login + heartbeat',
+    beat.ok ? 'PASS' : 'FAIL',
+    beat.ok
+      ? `${beat.data.deviceCode} accepted · clock drift ${beat.data.clockDriftSeconds} s`
+      : `${beat.code}: ${beat.message} (check DEVICE_ID / DEVICE_SECRET)`,
+  );
 }
 
 async function main(): Promise<void> {

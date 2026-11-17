@@ -1,4 +1,12 @@
-import { ErrorCode, HealthResponseSchema, type HealthReport } from '@calc-rental/shared';
+import {
+  DEVICE_ID_HEADER,
+  ErrorCode,
+  HealthResponseSchema,
+  HeartbeatResponseSchema,
+  type HealthReport,
+  type HeartbeatReply,
+  type HeartbeatRequest,
+} from '@calc-rental/shared';
 import type { z } from 'zod';
 
 /**
@@ -9,7 +17,7 @@ import type { z } from 'zod';
  * - Errors become values ({ ok: false, code }) instead of exceptions, so the
  *   state machine can decide what to show on the LCD.
  *
- * Phase 9 adds device authentication headers and idempotency keys here.
+ * Device APIs send x-device-id + Bearer secret (spec §19); idempotency keys arrive with sync (Phase 12).
  */
 
 export type BackendResult<T> =
@@ -19,6 +27,9 @@ export type BackendResult<T> =
 export interface BackendClientOptions {
   baseUrl: string;
   timeoutMs: number;
+  /** Needed for device APIs (heartbeat, sync); not for /api/health. */
+  deviceId?: string;
+  deviceSecret?: string;
 }
 
 export class BackendClient {
@@ -26,6 +37,21 @@ export class BackendClient {
 
   async getHealth(): Promise<BackendResult<HealthReport>> {
     return this.request('/api/health', HealthResponseSchema);
+  }
+
+  /** Tells the backend this kiosk is alive; the reply carries the server clock. */
+  async heartbeat(beat: HeartbeatRequest): Promise<BackendResult<HeartbeatReply>> {
+    return this.request('/api/device/heartbeat', HeartbeatResponseSchema, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...this.deviceHeaders() },
+      body: JSON.stringify(beat),
+    });
+  }
+
+  private deviceHeaders(): Record<string, string> {
+    const { deviceId, deviceSecret } = this.options;
+    if (!deviceId || !deviceSecret) throw new Error('Device credentials are not configured');
+    return { [DEVICE_ID_HEADER]: deviceId, Authorization: `Bearer ${deviceSecret}` };
   }
 
   private async request<T>(

@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-19, end of **Phase 8** (live dashboard)
+> **Last updated:** 2026-11-19, end of **Phase 9** (kiosk service: state machine, mock hardware, device login)
 
 ---
 
@@ -43,9 +43,9 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 5 | Rental rules: eligibility and availability, as shared logic run by the kiosk on SQLite | ✅ Done and verified |
 | 6 | Coin payment sessions (kiosk-side, recorded in SQLite) | ✅ Done and verified |
 | 7 | Return rules, RFID verification, penalty engine, Settings page | ✅ Done and verified |
-| 8 | Realtime dashboard: summary cards, Active Rentals countdowns, live updates | ✅ Built and tested. ⏳ Checklist pending (§6). |
-| 9 | Raspberry Pi service: state machine, adapters, device auth | ⬜ Next |
-| 10 | ESP32-CAM QR firmware + serial link | ⬜ |
+| 8 | Realtime dashboard: summary cards, Active Rentals countdowns, live updates | ✅ Done and verified |
+| 9 | Raspberry Pi service: state machine, mock hardware, 16×2 LCD messages, device login + heartbeat | ✅ Built and tested. ⏳ Checklist pending (§6). |
+| 10 | ESP32-CAM QR firmware + serial link | ⬜ Next |
 | 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer | ⬜ |
 | 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ⬜ |
 | 13 | Error handling, audit logs, device monitoring | ⬜ |
@@ -63,7 +63,7 @@ These block later phases. Whoever has the hardware, please fill them in.
 | # | Item | Needed by | Status |
 |---|---|---|---|
 | 1 | Relay module polarity: **active-LOW or active-HIGH**? (Does the IN LED light when the pin is pulled LOW?) | Phase 11 | ⏳ **Deferred, reminder pending** |
-| 2 | LCD size: **16×2 or 20×4**? | Phase 9 (messages) / 11 | ⏳ **Deferred, reminder pending** |
+| 2 | LCD size | — | ✅ **16×2** (confirmed 2026-11-17); all messages fit 16 characters |
 | 3 | Add a **3rd relay** to switch the coin selector's 12 V power? Otherwise coins inserted while idle are swallowed. | Phase 11 | Recommended, not decided |
 | 4 | Add **2 reed switches** (door sensors)? | Phase 11 | Recommended, not decided |
 | 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 (update seed/inventory) | Not collected yet |
@@ -118,7 +118,7 @@ The Pi `.env` defaults work on a laptop.
 | Command | Expected result |
 |---|---|
 | `npm run typecheck` | No errors |
-| `npm test` | All tests pass (245 at the end of Phase 8) |
+| `npm test` | All tests pass (272 at the end of Phase 9) |
 | `npm run dev:web`, then open http://localhost:3000 | Redirects to the login page. After signing in, the Dashboard's system check cards are green. |
 | `npm run check:pi` (second terminal, web running) | `SYSTEM CHECK PASSED` |
 
@@ -158,7 +158,73 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 8 hand-off: live dashboard
+## 6. Phase 9 hand-off: kiosk service (state machine, mock hardware, device login)
+
+Delivered as **three PRs**:
+- **9a** `phase-9a/lcd-hardware-mocks`: LCD messages and hardware interfaces
+- **9b** `phase-9b/kiosk-state-machine`: the kiosk brain
+- **9c** `phase-9c/device-heartbeat`: device login and heartbeat
+
+### Built
+- **16×2 LCD messages** (`apps/raspberry-pi/src/kiosk/lcd.ts`):
+  - every screen is exactly 2 lines of 16 plain characters ("P20", since the LCD has no ₱; Ñ becomes N)
+  - one catalog for all messages, plus a refusal screen for each error
+  - the spec's "RETURN BY 12:00 PM" is 18 characters, so it became **"DUE AT 12:00 PM"**
+- **Hardware interfaces** (`src/hardware/types.ts`, spec §44): QRScanner, CoinAcceptor, RFIDReader, LockerController, DisplayController, BuzzerController and ClockSource.
+  - The kiosk logic never touches GPIO.
+  - **Mock** versions (`src/hardware/mock.ts`) run everything on a laptop. Phases 10–11 add the real ones.
+- **Kiosk state machine** (`src/kiosk/kiosk-controller.ts`, spec §21):
+  - Scans, coins and a 250 ms tick all go through **one queue**, so two inputs never interleave.
+  - Only allowed moves are possible. For example, SYSTEM_READY → OPENING_LOCKER is impossible.
+  - **One scan decides borrow or return:** a student with a calculator out is returning it.
+  - **Borrow:** quote, coins, unlock **only** the assigned locker, RFID confirms removal, RENTAL SUCCESS. Payment and removal have timeouts.
+  - **Return:** late students pay the penalty first. Only their locker opens. It completes only with the right tag and the door closed (if a door sensor is fitted). A **wrong calculator** re-opens the locker once so it can be swapped.
+  - **At boot:** waits for clock sync (no RTC), then reads every RFID reader **before** the first scan is accepted.
+  - **Restart recovery** after a power cut:
+    - open payment sessions are cancelled
+    - paid-but-not-handed-out rentals become FAILED, flagged for an officer refund
+    - interrupted returns go back to ACTIVE
+  - Sensor states are saved on change, plus once every 30 s, which is easy on the SD card.
+  - A hardware fault shows **SYSTEM ERROR** and recovers.
+- **Device login** (spec §19):
+  - The kiosk sends `x-device-id` and `Authorization: Bearer <secret>`. The server compares SHA-256 hashes in constant time and checks the device is enabled. Every failure gives the same 401.
+  - `POST /api/device/heartbeat`, sent every 30 s, records the kiosk as **ONLINE** with its version, state, sync backlog, CPU temperature and **clock drift**. A drift over 2 minutes is logged as a warning.
+  - `npm run check:pi` now also checks **"Device login + heartbeat"**.
+- **Mock console:** `npm run start:pi` (mock mode) runs the real kiosk process and lets you play the student and the sensors from the keyboard:
+  ```
+  juan | maria | pedro | carlo | ana     scan an ID (ana is blocked)
+  coin 20                                insert a coin (1, 5, 10, 20)
+  take 1                                 take the calculator out of Locker 1
+  put 1 1                                put CALC-001 into Locker 1 (put 1 2 = wrong calculator)
+  door 1 open | door 1 closed            door sensor
+  wait 240                               jump the kiosk clock 4 hours ahead (try a late return)
+  state | help
+  ```
+- 32 new tests: LCD, state machine and recovery, device secret check. 272 in total.
+
+### Not yet (by design)
+- **Real drivers:** ESP32-CAM serial (Phase 10); RC522, relays, coin pulses, LCD over I2C and the buzzer (Phase 11).
+- **Sending kiosk records to Supabase:** Phase 12. The heartbeat already reports how many are waiting.
+- **The production device secret.** The kiosk still uses the development placeholder secret. Phase 15 generates a real one per kiosk.
+
+### Phase 9 verification checklist
+- [ ] `npm run typecheck` shows no errors, and `npm test` reports **272 passed**
+- [ ] With `npm run dev:web` running, `npm run check:pi` shows **"Device login + heartbeat — DEVICE-CALC-KIOSK-001 accepted"** and 15 passed
+- [ ] Dashboard **Lockers** page: the Kiosk column shows **ONLINE** for about 90 s after the check, then OFFLINE (no heartbeat), which is correct
+- [ ] `npm run seed:pi`, then `npm run start:pi`, then type in order:
+  1. `juan`: shows JUAN DELA CRUZ / P20 / 3 HOURS
+  2. `coin 20`: shows LOCKER 1 OPEN
+  3. `take 1`: shows RENTAL SUCCESS / DUE AT …
+  4. `wait 240`, then `juan`: shows LATE 1H00M / PAY PENALTY P10
+  5. `coin 10`: shows RETURN CALC #1 / TO LOCKER 1
+  6. `put 1 2`: shows **WRONG CALCULATOR**
+  7. `put 1 1`: shows **RETURN SUCCESS / PENALTY: P10**
+- [ ] `ana`: shows ACCOUNT BLOCKED. A `coin 5` while idle is recorded for refund.
+- [ ] Ctrl+C mid-payment, then `npm run start:pi` again: the kiosk returns to SYSTEM READY, and the student can start over
+
+---
+
+## 6.0d Phase 8 hand-off (completed): live dashboard
 
 ### Built
 - **Dashboard cards**, all computed by one database view, `v_dashboard_summary`:
@@ -547,6 +613,7 @@ calculator-rental-system/
 |---|---|
 | `npm run dev:web` | Dashboard and API at http://localhost:3000 |
 | `npm run dev:pi` | Pi kiosk service (mock hardware), restarts on save |
+| `npm run start:pi` | Pi kiosk service without auto-restart: use this for the **mock keyboard console** (`juan`, `coin 20`, `take 1`, `wait 240`, …) |
 | `npm run check:pi` | Pi system check: SQLite + backend |
 | `npm run demo:pi` | Demo: a full borrow with coin payment and the refusal cases on a throwaway database, printed as LCD screens |
 | `npm run seed:pi` | Load the fake development data into the kiosk's SQLite file. Add `-- --sensors-ready` to simulate both calculators detected. |
