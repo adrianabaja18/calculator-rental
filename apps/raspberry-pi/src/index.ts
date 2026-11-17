@@ -1,10 +1,19 @@
 import fs from 'node:fs';
 import { APP_VERSION, HEARTBEAT_INTERVAL_SECONDS, MAX_CLOCK_DRIFT_SECONDS } from '@calc-rental/shared';
 import { BackendClient } from './backend/client';
-import { config } from './config';
+import { bridgeArgs, config } from './config';
 import { KioskStore } from './db/kiosk-store';
 import { getLocalConfig, getSchemaVersion, openLocalDatabase, setLocalConfig } from './db/sqlite';
 import { createMockHardware } from './hardware/mock';
+import { BridgeClient } from './hardware/real/bridge-client';
+import {
+  BridgeBuzzer,
+  BridgeCoinAcceptor,
+  BridgeDisplay,
+  BridgeLockerController,
+  BridgeRFIDReader,
+  SystemClock,
+} from './hardware/real/bridge-hardware';
 import { SerialQRScanner } from './hardware/real/serial-qr-scanner';
 import type { Hardware } from './hardware/types';
 import { printLcd, startMockConsole } from './hardware/mock-console';
@@ -18,7 +27,7 @@ import { ReturnService } from './rental/return-service';
  * Raspberry Pi kiosk service.
  *
  *   1. validates configuration and opens the local SQLite database (main DB),
- *   2. builds the hardware (mock now; real GPIO/SPI/I2C/serial in Phases 10–11),
+ *   2. builds the hardware: HARDWARE_MODE=mock (laptop console) or real (Pi, via the Python bridge),
  *   3. runs the kiosk state machine (tick every 250 ms),
  *   4. sends a heartbeat every 30 s (device-authenticated; sync arrives in Phase 12),
  *   5. shuts down cleanly on Ctrl+C / systemd stop.
@@ -50,36 +59,62 @@ async function main(): Promise<void> {
     logger.warn({ event: 'SYSTEM_ERROR' }, 'No settings in the kiosk database yet. For development run: npm run seed:pi');
   }
 
-  if (config.HARDWARE_MODE === 'real') {
-    throw new Error('Real hardware drivers arrive in Phases 10–11. Use HARDWARE_MODE=mock for now.');
-  }
+  // The ESP32-CAM scanner (Phase 10) works in both modes.
+  const serialScanner =
+    config.QR_SCANNER === 'serial'
+      ? new SerialQRScanner(config.SCANNER_PORT, (level, message, data) => logger[level]({ event: 'QR_SCANNER', ...data }, message))
+      : null;
 
-  // Mock mode: a clock the console can move forward to try late returns.
+  // Mock mode: a clock the console can move forward to try late returns. Real mode: the system clock.
   let offsetMs = 0;
   const now = () => new Date(Date.now() + offsetMs);
-  const hw = createMockHardware(printLcd);
-  for (const locker of store.listLockerHardware()) {
-    if (locker.expectedUid) hw.rfid.place(locker.channel, locker.expectedUid); // calculators start inside
+  const mock = createMockHardware(printLcd);
+  let bridge: BridgeClient | null = null;
+  let hardware: Hardware;
+
+  if (config.HARDWARE_MODE === 'real') {
+    // Phase 11: relays, coin pulses, RC522 readers, LCD and buzzer through the Python bridge.
+    bridge = new BridgeClient({
+      pythonBin: config.PYTHON_BIN,
+      args: bridgeArgs(config),
+      log: (level, message, data) => logger[level]({ event: 'HW_BRIDGE', ...data }, message),
+    });
+    bridge.start();
+    const ready = await Promise.race([bridge.ready, new Promise<null>((r) => setTimeout(() => r(null), 15_000))]);
+    if (!ready) throw new Error('Hardware bridge did not start. Run: npm run hwcheck:pi');
+    logger.info({ event: 'HW_BRIDGE', mode: ready.mode, devices: ready.devices }, 'Hardware bridge ready');
+    hardware = {
+      scanner: serialScanner ?? mock.scanner,
+      coins: new BridgeCoinAcceptor(bridge),
+      rfid: new BridgeRFIDReader(bridge),
+      lockers: new BridgeLockerController(bridge),
+      display: new BridgeDisplay(bridge, config.LOG_PRETTY ? printLcd : undefined),
+      buzzer: new BridgeBuzzer(bridge),
+      clock: new SystemClock(),
+    };
+  } else {
+    for (const locker of store.listLockerHardware()) {
+      if (locker.expectedUid) mock.rfid.place(locker.channel, locker.expectedUid); // calculators start inside
+    }
+    hardware = { ...mock, scanner: serialScanner ?? mock.scanner };
   }
 
   const rentals = new RentalService(store, { deviceCode: config.DEVICE_ID, now });
   const payments = new PaymentService(store, rentals, { now });
   const returns = new ReturnService(store, payments, { now });
-  // Phase 10: the real ESP32-CAM scanner can replace the mock one; everything else stays simulated until Phase 11.
-  const serialScanner =
-    config.QR_SCANNER === 'serial'
-      ? new SerialQRScanner(config.SCANNER_PORT, (level, message, data) => logger[level]({ event: 'QR_SCANNER', ...data }, message))
-      : null;
-  const hardware: Hardware = { ...hw, scanner: serialScanner ?? hw.scanner };
-
   const kiosk = new KioskController(store, hardware, { rentals, payments, returns }, {
     now,
+    lockPulseMs: config.LOCK_PULSE_MS,
     log: (level, message, data) => logger[level]({ event: 'KIOSK', ...data }, message),
   });
   await kiosk.start();
   serialScanner?.start();
   const ticker = setInterval(() => void kiosk.tick(), TICK_MS);
-  const console_ = startMockConsole({ hw, kiosk, store, addMinutes: (m) => (offsetMs += m * 60_000) });
+  // Keyboard console only with simulated hardware (the real kiosk has no keyboard).
+  const console_ =
+    config.HARDWARE_MODE === 'mock'
+      ? startMockConsole({ hw: mock, kiosk, store, addMinutes: (m) => (offsetMs += m * 60_000) })
+      : null;
 
   const backend = new BackendClient({
     baseUrl: config.BACKEND_URL,
@@ -116,7 +151,8 @@ async function main(): Promise<void> {
     logger.info({ event: 'SERVICE_STOPPING', signal }, 'Shutting down');
     clearInterval(ticker);
     clearInterval(connectivity);
-    console_.close();
+    console_?.close();
+    bridge?.stop();
     serialScanner?.stop();
     db.close(); // checkpoints the WAL; safe to power off afterwards
   };
@@ -125,7 +161,7 @@ async function main(): Promise<void> {
 
   logger.info(
     { event: 'SERVICE_READY', qrScanner: config.QR_SCANNER === 'serial' ? config.SCANNER_PORT : 'mock' },
-    'Kiosk running (mock coins/RFID/locks). Type "help" for controls, Ctrl+C to stop.',
+    config.HARDWARE_MODE === 'mock' ? 'Kiosk running on SIMULATED hardware. Type "help" for controls, Ctrl+C to stop.' : 'Kiosk running on REAL hardware.',
   );
 }
 
