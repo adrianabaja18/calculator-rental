@@ -163,11 +163,11 @@ The tool prints which devices it found, then accepts commands. Work through it i
 | 4. RFID | `watch`, then place/remove each calculator over its reader | `RFID reader 1: tag 04-…` / `no tag` |
 | 5. Coins | insert ₱1, ₱5, ₱10, ₱20 | `COIN: 5 pulse(s) = P5`, … |
 
-**Write down the two tag UIDs from step 4.** They go into the dashboard (**Calculators → Edit → RFID tag UID**) and into the kiosk's local database (Phase 12 sync will do this automatically; until then, edit `apps/raspberry-pi/src/db/dev-seed.ts` or re-seed).
+**Write down the two tag UIDs from step 4.** They go into the dashboard (**Calculators → Edit → RFID tag UID**) and into the kiosk's local database (Phase 12 sync will do this automatically; until then pass them to the seed, using your own UIDs):
 
 Then run the whole kiosk:
 ```bash
-npm run seed:pi
+npm run seed:pi -- --rfid1 <UID of the Locker 1 calculator> --rfid2 <UID of the Locker 2 calculator>
 ```
 ```bash
 npm run start:pi
