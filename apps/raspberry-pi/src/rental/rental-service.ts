@@ -7,11 +7,14 @@ import {
   LockerStatus,
   RentalStatus,
   StudentStatus,
+  SystemSettingsSchema,
+  addOperatingMinutes,
   assertTransition,
   checkBorrowEligibility,
-  computeDueAt,
   findInventoryMismatches,
   generateTransactionCode,
+  isOpenAt,
+  operatingCalendar,
   parseStudentQr,
   selectLockerForRental,
 } from '@calc-rental/shared';
@@ -54,6 +57,8 @@ export interface RentalServiceOptions {
 }
 
 const fail = (code: ErrorCode, message: string) => ({ ok: false as const, code, message });
+/** Borrowing only during operating hours (returns are always accepted). */
+const closed = () => fail(ErrorCode.KIOSK_CLOSED, 'Borrowing is only possible during operating hours.');
 
 export class RentalService {
   private readonly now: () => Date;
@@ -78,6 +83,7 @@ export class RentalService {
     if (!qr.ok) return this.invalidQr(qrRaw, qr.reason);
     const settings = this.store.getSettings();
     if (!settings) return fail(ErrorCode.DATABASE_UNAVAILABLE, 'The kiosk has not received its settings yet.');
+    if (!isOpenAt(this.now(), operatingCalendar(settings))) return closed();
     const student = this.store.findStudentByNumber(qr.data.studentNumber);
     const openRental = student ? this.store.getOpenRentalForStudent(student.id) : null;
     const eligibility = checkBorrowEligibility({
@@ -102,6 +108,7 @@ export class RentalService {
     if (!settings) {
       return fail(ErrorCode.DATABASE_UNAVAILABLE, 'The kiosk has not received its settings yet.');
     }
+    if (!isOpenAt(now, operatingCalendar(settings))) return closed();
 
     // 2–6 run in ONE transaction: two scans can never both reserve the
     // last calculator, and nothing is half-saved after a power cut.
@@ -218,6 +225,12 @@ export class RentalService {
     }
   }
 
+  /** The settings in force when this rental started (its snapshot), else the current ones. */
+  private settingsFor(rental: RentalRecord) {
+    const snapshot = SystemSettingsSchema.safeParse(JSON.parse(rental.settings_snapshot));
+    return snapshot.success ? snapshot.data : this.store.getSettings()!;
+  }
+
   private invalidQr(qrRaw: string, reason: string) {
     this.store.recordEvent({
       type: EventType.QR_INVALID,
@@ -290,7 +303,8 @@ export class RentalService {
     const nowIso = now.toISOString();
     // Server-side spec said "server timestamps"; under SQLite-first the
     // kiosk clock is used, which is why the kiosk waits for time sync at boot.
-    const dueAt = computeDueAt(now, rental.rental_duration_minutes).toISOString();
+    // The duration counts operating hours only (rules in force when the rental started).
+    const dueAt = addOperatingMinutes(now, rental.rental_duration_minutes, operatingCalendar(this.settingsFor(rental))).toISOString();
 
     return this.store.transaction(() => {
       const moved = this.transition(rental, RentalStatus.ACTIVE, {

@@ -23,6 +23,18 @@ export function screen(line1: string, line2 = ''): LcdScreen {
   return [toLcdText(line1), toLcdText(line2)];
 }
 
+// ---- Philippine-time helpers for the LCD (Manila is always UTC+8, no DST) ----
+const manilaDate = (value: Date | string) => new Date(new Date(value).getTime() + 8 * 3_600_000).toISOString().slice(0, 10);
+const sameManilaDay = (a: Date | string, b: Date | string) => manilaDate(a) === manilaDate(b);
+const weekday = (value: Date | string) =>
+  new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Manila', weekday: 'short' }).format(new Date(value));
+/** "WED 9:00AM" (max 10 chars) */
+function shortWhen(value: Date): string {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(value);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${weekday(value)} ${get('hour')}:${get('minute')}${get('dayPeriod')}`;
+}
+
 const peso = (centavos: number) => `P${Math.floor(centavos / 100)}${centavos % 100 ? `.${String(centavos % 100).padStart(2, '0')}` : ''}`;
 const hours = (minutes: number) => (minutes % 60 === 0 ? `${minutes / 60} HOUR${minutes === 60 ? '' : 'S'}` : `${minutes} MIN`);
 
@@ -42,7 +54,16 @@ export const LCD = {
     screen(`PAYMENT ${peso(paidCentavos)}/${peso(requiredCentavos)}`, 'INSERT COINS'),
   lockerOpen: (lockerNumber: number) => screen(`LOCKER ${lockerNumber} OPEN`, 'TAKE CALCULATOR'),
   // "RETURN BY 12:00 PM" (spec) is 18 chars; "DUE AT 12:00 PM" always fits in 16.
-  rentalSuccess: (dueAt: string) => screen('RENTAL SUCCESS', `DUE AT ${formatPhilippineTime(dueAt)}`),
+  // Due on another day (rental clock pauses while closed): "DUE WED 10:00 AM" (16).
+  rentalSuccess: (dueAt: string, now: Date) =>
+    screen(
+      'RENTAL SUCCESS',
+      sameManilaDay(dueAt, now) ? `DUE AT ${formatPhilippineTime(dueAt)}` : `DUE ${weekday(dueAt)} ${formatPhilippineTime(dueAt)}`,
+    ),
+  /** Idle outside operating hours: students can still return. */
+  closedIdle: (opensAt: Date | null) => screen('RETURNS ONLY', opensAt ? `OPEN ${shortWhen(opensAt)}` : 'KIOSK CLOSED'),
+  /** Someone tried to borrow outside operating hours. */
+  closedForBorrowing: (opensAt: Date | null) => screen('KIOSK CLOSED', opensAt ? `OPEN ${shortWhen(opensAt)}` : 'SEE AN OFFICER'),
   penaltyDue: (overdueMinutes: number, penaltyCentavos: number) =>
     screen(`LATE ${Math.floor(overdueMinutes / 60)}H${String(overdueMinutes % 60).padStart(2, '0')}M`, `PAY PENALTY ${peso(penaltyCentavos)}`),
   returnTo: (calculatorCode: string, lockerNumber: number) =>

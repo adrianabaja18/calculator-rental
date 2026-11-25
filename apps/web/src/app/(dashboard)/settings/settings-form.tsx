@@ -1,7 +1,15 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
-import { PenaltyType, SUPPORTED_COIN_DENOMINATIONS, calculatePenalty, type SystemSettings } from '@calc-rental/shared';
+import {
+  PenaltyType,
+  SUPPORTED_COIN_DENOMINATIONS,
+  addOperatingMinutes,
+  formatPhilippineDateTime,
+  operatingCalendar,
+  penaltyForMinutes,
+  type SystemSettings,
+} from '@calc-rental/shared';
 import { useToast } from '@/components/ui/toast';
 import { IDLE_RESULT } from '@/lib/action-result';
 import { updateSettings } from './actions';
@@ -62,7 +70,34 @@ function preview(form: HTMLFormElement | null, fallback: SystemSettings) {
         const [m, a] = l.split('=').map((p) => Number(p.trim()));
         return { upToMinutes: m ?? 0, amount: a ?? 0 };
       }),
+    rentalDurationMinutes: Math.max(1, n('rentalDurationMinutes', fallback.rentalDurationMinutes)),
+    operatingHoursStart: String(fd.get('operatingHoursStart') || fallback.operatingHoursStart),
+    operatingHoursEnd: String(fd.get('operatingHoursEnd') || fallback.operatingHoursEnd),
+    operatingDays: fd.getAll('operatingDays').map(Number),
+    pauseClockOutsideHours: fd.get('pauseClockOutsideHours') === 'on',
   };
+}
+
+const WEEKDAYS = [
+  [1, 'Mon'],
+  [2, 'Tue'],
+  [3, 'Wed'],
+  [4, 'Thu'],
+  [5, 'Fri'],
+  [6, 'Sat'],
+  [7, 'Sun'],
+] as const;
+
+/** "A rental at Tue 3:00 PM is due …" with the hours currently typed in the form. */
+function dueExample(s: SystemSettings): string {
+  try {
+    if (s.operatingDays.length === 0 || s.operatingHoursEnd <= s.operatingHoursStart) return 'Check the opening hours and days.';
+    const start = new Date('2026-10-20T15:00:00+08:00'); // a Tuesday, 3:00 PM
+    const due = addOperatingMinutes(start, s.rentalDurationMinutes, operatingCalendar(s));
+    return `Example: borrowed Tuesday 3:00 PM → due ${formatPhilippineDateTime(due)}.`;
+  } catch {
+    return 'Check the opening hours and days.';
+  }
 }
 
 export function SettingsForm({ settings, canEdit }: { settings: SystemSettings; canEdit: boolean }) {
@@ -75,10 +110,9 @@ export function SettingsForm({ settings, canEdit }: { settings: SystemSettings; 
     if (state.at !== 0 && state.ok) toast('success', state.message);
   }, [state, toast]);
 
-  const due = new Date(0);
   const rows = PREVIEW_MINUTES.map((m) => ({
     minutes: m,
-    pesos: calculatePenalty(due, new Date(m * 60_000), draft).amountCentavos / 100,
+    pesos: penaltyForMinutes(m, draft).amountCentavos / 100,
   }));
 
   return (
@@ -114,6 +148,54 @@ export function SettingsForm({ settings, canEdit }: { settings: SystemSettings; 
           />
         </Section>
 
+        <Section title="Operating hours (Philippine time)">
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-slate-700">Opens</span>
+            <input type="time" name="operatingHoursStart" defaultValue={settings.operatingHoursStart} className={input} />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-slate-700">Closes</span>
+            <input type="time" name="operatingHoursEnd" defaultValue={settings.operatingHoursEnd} className={input} />
+          </label>
+          <fieldset className="sm:col-span-2">
+            <legend className="mb-2 text-sm font-medium text-slate-700">Open on</legend>
+            <div className="flex flex-wrap gap-4">
+              {WEEKDAYS.map(([day, label]) => (
+                <label key={day} className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    name="operatingDays"
+                    value={day}
+                    defaultChecked={settings.operatingDays.includes(day)}
+                    className="h-4 w-4 rounded border-slate-300"
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <div className="sm:col-span-2">
+            <Check
+              label="Rental time and late fees count only while open"
+              name="pauseClockOutsideHours"
+              checked={settings.pauseClockOutsideHours}
+              hint="The clock pauses at closing time and continues when the kiosk opens again. Borrowing is only possible while open; returns are accepted any time the kiosk is on."
+            />
+            <p className="mt-2 text-sm text-slate-700">{dueExample(draft)}</p>
+          </div>
+          <label className="block sm:col-span-2">
+            <span className="mb-1 block text-sm font-medium text-slate-700">Closed dates (holidays, class suspensions)</span>
+            <textarea
+              name="closedDates"
+              rows={3}
+              defaultValue={settings.closedDates.join('\n')}
+              placeholder={'2026-12-24\n2026-12-25'}
+              className={`${input} font-mono`}
+            />
+            <span className="mt-1 block text-xs text-slate-500">One date per line (YYYY-MM-DD). The kiosk is closed and the clock pauses all day.</span>
+          </label>
+        </Section>
+
         <Section title="Overdue penalty">
           <Check label="Penalties enabled" name="penaltyEnabled" checked={settings.penaltyEnabled} />
           <label className="block">
@@ -141,7 +223,9 @@ export function SettingsForm({ settings, canEdit }: { settings: SystemSettings; 
           </label>
 
           <div className="sm:col-span-2">
-            <p className="mb-2 text-sm font-medium text-slate-700">Preview: what a late return costs</p>
+            <p className="mb-2 text-sm font-medium text-slate-700">
+              Preview: what a late return costs{draft.pauseClockOutsideHours ? ' (hours counted while open)' : ''}
+            </p>
             <div className="overflow-x-auto rounded-md border border-slate-200">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-xs text-slate-600 uppercase">

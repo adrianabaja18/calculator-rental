@@ -1,12 +1,15 @@
 import { DoorState, PenaltyType } from '../enums';
 import { ErrorCode } from '../errors';
 import type { SystemSettings } from '../validation';
+import { operatingCalendar, operatingMinutesBetween, type OperatingSettings } from './operating-hours';
 import { refuse, type RuleResult } from './result';
 
 export type PenaltySettings = Pick<
   SystemSettings,
   'penaltyEnabled' | 'penaltyType' | 'penaltyAmount' | 'penaltyIntervalMinutes' | 'penaltySteps' | 'maxPenalty' | 'gracePeriodMinutes'
->;
+> &
+  /** Without these, every minute counts (as before operating hours existed). */
+  Partial<OperatingSettings>;
 
 export interface PenaltyQuote {
   /** Whole minutes past due_at. */
@@ -16,17 +19,24 @@ export interface PenaltyQuote {
 
 /**
  * Overdue penalty (spec §7). Rules come from Settings, never hard-coded.
- *  - Within the grace period: nothing.
- *  - After it, lateness is counted from due_at (grace is not subtracted).
+ *  - Lateness = minutes past due_at that fall inside operating hours (when
+ *    the rental clock pauses outside them, team decision 2026-11-27).
+ *  - Within the grace period: nothing. After it, lateness counts from due_at.
  *  - FLAT: one amount. PER_INTERVAL: amount per STARTED interval.
  *    STEPPED: first tier whose upToMinutes covers the lateness (last tier beyond).
  *  - maxPenalty caps the total.
  *
- * Team policy 2026-11-17: PER_INTERVAL ₱10 per 90 min, 10-min grace
+ * Team policy: PER_INTERVAL ₱10 per 90 min, 10-min grace
  *   1 h late → ₱10 · 2 h → ₱20 · 3 h → ₱20 · 4 h → ₱30
+ *   due Tue 4:00 PM, back Wed 10:00 AM → 1 h Tue + 1 h Wed = 2 h late → ₱20
  */
 export function calculatePenalty(dueAt: Date | string, at: Date, settings: PenaltySettings): PenaltyQuote {
-  const overdueMinutes = Math.max(0, Math.floor((at.getTime() - new Date(dueAt).getTime()) / 60_000));
+  const overdue = operatingMinutesBetween(new Date(dueAt), at, operatingCalendar(settings));
+  return penaltyForMinutes(overdue, settings);
+}
+
+/** The penalty for `overdueMinutes` of (operating-hours) lateness. */
+export function penaltyForMinutes(overdueMinutes: number, settings: PenaltySettings): PenaltyQuote {
   if (!settings.penaltyEnabled || overdueMinutes <= settings.gracePeriodMinutes) {
     return { overdueMinutes, amountCentavos: 0 };
   }

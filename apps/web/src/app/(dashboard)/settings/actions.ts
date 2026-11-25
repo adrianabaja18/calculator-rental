@@ -38,6 +38,15 @@ function readForm(fd: FormData) {
     returnTimeoutSeconds: num('returnTimeoutSeconds'),
     allowOfflineReturns: on('allowOfflineReturns'),
     allowOfflineRentals: on('allowOfflineRentals'),
+    operatingHoursStart: String(fd.get('operatingHoursStart') ?? ''),
+    operatingHoursEnd: String(fd.get('operatingHoursEnd') ?? ''),
+    operatingDays: fd.getAll('operatingDays').map(Number),
+    closedDates: String(fd.get('closedDates') ?? '')
+      .split(/[\n,]/)
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .sort(),
+    pauseClockOutsideHours: on('pauseClockOutsideHours'),
   };
 }
 
@@ -59,6 +68,11 @@ function toRow(s: SystemSettings) {
     return_timeout_seconds: s.returnTimeoutSeconds,
     allow_offline_returns: s.allowOfflineReturns,
     allow_offline_rentals: s.allowOfflineRentals,
+    operating_hours_start: s.operatingHoursStart,
+    operating_hours_end: s.operatingHoursEnd,
+    operating_days: s.operatingDays,
+    closed_dates: s.closedDates,
+    pause_clock_outside_hours: s.pauseClockOutsideHours,
   };
 }
 

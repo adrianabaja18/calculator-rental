@@ -1071,6 +1071,11 @@ export type Database = {
           accepted_coin_denominations: number[]
           allow_offline_rentals: boolean
           allow_offline_returns: boolean
+          closed_dates: string[]
+          operating_days: number[]
+          operating_hours_end: string
+          operating_hours_start: string
+          pause_clock_outside_hours: boolean
           grace_period_minutes: number
           id: number
           max_concurrent_rentals_per_student: number
@@ -1093,6 +1098,11 @@ export type Database = {
           accepted_coin_denominations: number[]
           allow_offline_rentals?: boolean
           allow_offline_returns?: boolean
+          closed_dates?: string[]
+          operating_days?: number[]
+          operating_hours_end?: string
+          operating_hours_start?: string
+          pause_clock_outside_hours?: boolean
           grace_period_minutes: number
           id?: number
           max_concurrent_rentals_per_student?: number
@@ -1115,6 +1125,11 @@ export type Database = {
           accepted_coin_denominations?: number[]
           allow_offline_rentals?: boolean
           allow_offline_returns?: boolean
+          closed_dates?: string[]
+          operating_days?: number[]
+          operating_hours_end?: string
+          operating_hours_start?: string
+          pause_clock_outside_hours?: boolean
           grace_period_minutes?: number
           id?: number
           max_concurrent_rentals_per_student?: number
@@ -1552,6 +1567,10 @@ export type Database = {
       is_admin: { Args: never; Returns: boolean }
       is_officer: { Args: never; Returns: boolean }
       is_super_admin: { Args: never; Returns: boolean }
+      operating_minutes_between: {
+        Args: { p_from: string; p_to: string }
+        Returns: number
+      }
       apply_kiosk_sync: {
         Args: { p_device_id: string; p_items: Json }
         Returns: Json

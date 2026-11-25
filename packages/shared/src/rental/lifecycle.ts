@@ -1,4 +1,5 @@
 import { RentalStatus } from '../enums';
+import { isOpenAt, operatingMillisBetween, type OperatingCalendar } from './operating-hours';
 
 /**
  * Rental transaction state machine (spec §11).
@@ -73,12 +74,25 @@ export function overdueMinutes(dueAt: Date | string | null, now: Date): number {
  * client from due_at every second; nothing is written to the database.
  *   { overdue: false, text: '01:42:15' }  → "Due in 01:42:15"
  *   { overdue: true,  text: '00:32:16' }  → "Overdue by 00:32:16"
+ * With an operating calendar that pauses outside hours, only operating time
+ * counts and `paused` is true while the kiosk is closed.
  * Hours can exceed 24 (e.g. '26:05:00').
  */
-export function rentalCountdown(dueAt: Date | string, now: Date): { overdue: boolean; text: string } {
-  const diffMs = new Date(dueAt).getTime() - now.getTime();
-  const total = Math.floor(Math.abs(diffMs) / 1000);
+export function rentalCountdown(
+  dueAt: Date | string,
+  now: Date,
+  cal?: OperatingCalendar,
+): { overdue: boolean; text: string; paused: boolean } {
+  const due = new Date(dueAt);
+  const overdue = now.getTime() > due.getTime();
+  const pausing = cal?.pauseOutside === true;
+  const ms = pausing
+    ? overdue
+      ? operatingMillisBetween(due, now, cal)
+      : operatingMillisBetween(now, due, cal)
+    : Math.abs(due.getTime() - now.getTime());
+  const total = Math.floor(ms / 1000);
   const pad = (n: number) => String(n).padStart(2, '0');
   const text = `${pad(Math.floor(total / 3600))}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
-  return { overdue: diffMs < 0, text };
+  return { overdue, text, paused: pausing && !isOpenAt(now, cal) };
 }

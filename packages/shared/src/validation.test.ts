@@ -37,11 +37,34 @@ const validSettings: SystemSettings = {
   returnTimeoutSeconds: 90,
   allowOfflineReturns: true,
   allowOfflineRentals: false,
+  operatingHoursStart: '09:00',
+  operatingHoursEnd: '17:00',
+  operatingDays: [1, 2, 3, 4, 5],
+  closedDates: [],
+  pauseClockOutsideHours: true,
 };
 
 describe('SystemSettingsSchema', () => {
   it('accepts the specification defaults', () => {
     expect(SystemSettingsSchema.safeParse(validSettings).success).toBe(true);
+  });
+
+  it('fills in operating hours for settings saved before they existed (old kiosk copies keep working)', () => {
+    const { operatingHoursStart, operatingHoursEnd, operatingDays, closedDates, pauseClockOutsideHours, ...old } = validSettings;
+    void [operatingHoursStart, operatingHoursEnd, operatingDays, closedDates, pauseClockOutsideHours];
+    expect(SystemSettingsSchema.parse(old)).toMatchObject({
+      operatingHoursStart: '09:00',
+      operatingHoursEnd: '17:00',
+      operatingDays: [1, 2, 3, 4, 5],
+      closedDates: [],
+      pauseClockOutsideHours: true,
+    });
+  });
+
+  it('rejects a closing time before the opening time, and bad dates', () => {
+    expect(SystemSettingsSchema.safeParse({ ...validSettings, operatingHoursStart: '17:00', operatingHoursEnd: '09:00' }).success).toBe(false);
+    expect(SystemSettingsSchema.safeParse({ ...validSettings, closedDates: ['25-12-2026'] }).success).toBe(false);
+    expect(SystemSettingsSchema.safeParse({ ...validSettings, operatingDays: [] }).success).toBe(false);
   });
 
   it.each<[string, Partial<SystemSettings>]>([

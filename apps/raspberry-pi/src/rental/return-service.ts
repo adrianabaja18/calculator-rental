@@ -10,7 +10,6 @@ import {
   assertTransition,
   calculatePenalty,
   isOverdue,
-  overdueMinutes,
   parseStudentQr,
   verifyReturnedCalculator,
   type DoorState,
@@ -197,7 +196,8 @@ export class ReturnService {
       return check;
     }
 
-    const late = overdueMinutes(rental.due_at, now);
+    // Lateness in operating minutes (time while the kiosk is closed doesn't count).
+    const late = calculatePenalty(rental.due_at!, now, this.settingsFor(rental)).overdueMinutes;
     const penalty = this.store.getOverduePenalty(rental.id);
     return this.store.transaction(() => {
       const moved = this.move(rental, RentalStatus.COMPLETED, {

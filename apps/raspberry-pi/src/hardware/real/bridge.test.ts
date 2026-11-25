@@ -28,6 +28,7 @@ const pythonAvailable = (() => {
   }
 })();
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const TUESDAY_10AM = new Date('2026-10-20T02:00:00.000Z'); // Manila time
 
 let bridge: BridgeClient | null = null;
 afterEach(() => bridge?.stop());
@@ -108,9 +109,10 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
     await bridge.request('mock_tag', { channel: 2, uid: DEV_RFID.calc2 });
 
     const mock = createMockHardware();
-    const rentals = new RentalService(store, { deviceCode: 'DEVICE-CALC-KIOSK-001' });
-    const payments = new PaymentService(store, rentals);
-    const returns = new ReturnService(store, payments);
+    const now = () => TUESDAY_10AM;
+    const rentals = new RentalService(store, { deviceCode: 'DEVICE-CALC-KIOSK-001', now });
+    const payments = new PaymentService(store, rentals, { now });
+    const returns = new ReturnService(store, payments, { now });
     const kiosk = new KioskController(
       store,
       {
@@ -124,7 +126,7 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
         buzzer: new BridgeBuzzer(bridge),
       },
       { rentals, payments, returns },
-      { messageMs: 200 },
+      { messageMs: 200, now }, // inside operating hours whatever time the test runs
     );
     await kiosk.start();
     await kiosk.handleScan('JUAN DELA CRUZ\t2022100001\tBSCpE');

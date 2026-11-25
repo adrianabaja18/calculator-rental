@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-27, end of **Phase 14** (simulator and system tests)
+> **Last updated:** 2026-11-27, **operating hours** added after Phase 14
 
 ---
 
@@ -69,7 +69,7 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 4b | Solenoid heat when held unlocked | Phase 11 bring-up | ⏳ The lock is held ON until the red button is pressed (up to 60/90 s). Run the heat check in `docs/raspberry-pi.md` §3.1; if the lock gets too hot, lower the removal/return timeouts in Settings. |
 | 5 | Real **RFID UIDs** of the two calculator tags | Phase 12 | ✅ Tag A `FE-AC-31-03` → CALC-001 (Locker 1), tag B `57-99-3B-03` → CALC-002 (Locker 2). ⚠️ **Enter them on the dashboard** (Calculators → Edit) before running the kiosk with sync, or the dashboard's fake seed UIDs replace them on the kiosk. |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
-| — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, keeps counting overnight, **paid before the return locker opens** (2026-11-18). Editable on the Settings page. |
+| — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, **paid before the return locker opens** (2026-11-18). **Operating hours Mon–Fri 9 AM–5 PM; rental and late time count only while open** (2026-11-27, replaces counting overnight). All editable on the Settings page. |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
 | — | School ID QR format | — | ✅ `FULL NAME<TAB>10-digit student number<TAB>COURSE` |
 
@@ -159,7 +159,36 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 14 hand-off: simulator and system testing
+## 6. Operating hours and the new late-fee rule (after Phase 14)
+
+### What changed (team decision 2026-11-27)
+- Settings have **operating hours** (default **Mon–Fri 9:00 AM–5:00 PM**), **closed dates** (holidays and suspensions), and **"rental time and late fees count only while open"** (on).
+- **Due time:** the 3 hours count only while open. Borrowed **Tue 3:00 PM** → 2 h Tue + 1 h Wed → **due Wed 10:00 AM**. Borrowed **Fri 4:00 PM** → due **Mon 11:00 AM**. The LCD shows `DUE WED 10:00 AM` when it's another day.
+- **Late fees:** only open minutes after the due time count. Due 4 PM, back next morning at 10 AM = 2 h late (₱20), not 18 h.
+- **Borrowing outside hours is refused** (`KIOSK CLOSED / OPEN WED 9:00AM`); otherwise an evening rental would get a free night. **Returns work any time** the kiosk is on. When idle after hours the LCD shows `RETURNS ONLY / OPEN …`.
+- **Dashboard:** Settings has an *Operating hours* section with a live "borrowed Tuesday 3 PM → due …" example. Active Rentals countdowns count open time only and show "(paused, closed)" at night. "Minutes late" in Supabase uses the same rule (`operating_minutes_between()`).
+- The simulator jumps its clock to the next opening if you start it at night.
+
+| Where | What |
+|---|---|
+| `packages/shared/src/rental/operating-hours.ts` | `operatingCalendar`, `isOpenAt`, `nextOpening`, `addOperatingMinutes`, `operatingMinutesBetween` |
+| `packages/shared` | Settings schema (new fields with defaults, so old saved settings stay valid), `calculatePenalty` → operating minutes, new `penaltyForMinutes`, `rentalCountdown(…, calendar)`, `ErrorCode.KIOSK_CLOSED` |
+| `supabase/migrations/20261127000300_operating_hours.sql` | New `system_settings` columns, `operating_minutes_between()`, `v_rentals` uses it |
+| Kiosk | Due time and late minutes by operating hours; refuses borrowing when closed; closed and next-day LCD screens |
+| Tests | `operating-hours.test.ts` (due times incl. weekend/holiday, lateness, open/closed, countdown). The SQL function is checked against the same cases, plus kiosk scenarios (3 PM rental, after-hours return). |
+
+### Set it up
+```bash
+npm run db:push
+```
+Then check **Settings → Operating hours** and add your school's holidays under closed dates.
+
+### Verification checklist
+- [ ] Settings shows *Opens 09:00, Closes 17:00, Mon–Fri* and the example "borrowed Tuesday 3:00 PM → due … 10:00 AM".
+- [ ] Simulator: borrow, then **+4 hours** past 5 PM → the idle LCD shows `RETURNS ONLY`. Scan another student → `KIOSK CLOSED`. Return Juan → the late time counted only up to 5 PM.
+- [ ] A rental made after 2 PM shows `DUE <weekday> …` on the LCD and a paused countdown on Active Rentals after 5 PM.
+
+## 6.0j Phase 14 hand-off (completed): simulator and system testing
 
 ### Built
 - **Kiosk simulator**: `npm run sim:pi`, then open http://localhost:4040.

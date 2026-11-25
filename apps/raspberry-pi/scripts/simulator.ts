@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DoorState } from '@calc-rental/shared';
+import { DoorState, nextOpening, operatingCalendar } from '@calc-rental/shared';
 import { DEV_RFID, DEV_STUDENT_QR, seedDevData } from '../src/db/dev-seed';
 import { KioskStore } from '../src/db/kiosk-store';
 import { openLocalDatabase } from '../src/db/sqlite';
@@ -41,6 +41,11 @@ const now = () => new Date(Date.now() + offsetMs);
 const store = new KioskStore(openLocalDatabase(DB_FILE));
 if (!store.getSettings()) seedDevData(store, { sensorsReady: false, nowIso: now().toISOString() });
 
+// Started outside operating hours (e.g. a demo at night)? Start the kiosk clock at the next opening.
+const opensAt = nextOpening(new Date(), operatingCalendar(store.getSettings()!));
+const jumpedToOpening = !!opensAt && opensAt.getTime() > Date.now();
+if (jumpedToOpening) offsetMs = opensAt.getTime() - Date.now();
+
 const hw = createMockHardware();
 hw.clock.synced = true;
 // Calculators that are not out with a student start inside their lockers.
@@ -60,6 +65,7 @@ const rentals = new RentalService(store, { deviceCode: 'DEVICE-SIMULATOR', now }
 const payments = new PaymentService(store, rentals, { now });
 const returns = new ReturnService(store, payments, { now });
 const kiosk = new KioskController(store, hw, { rentals, payments, returns }, { now, log: addLog });
+if (jumpedToOpening) addLog('info', 'Started outside operating hours: kiosk clock set to the next opening time');
 await kiosk.start();
 setInterval(() => void kiosk.tick(), 250);
 

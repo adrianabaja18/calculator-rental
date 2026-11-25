@@ -51,6 +51,12 @@ export const DEV_SETTINGS: SystemSettings = {
   returnTimeoutSeconds: 90,
   allowOfflineReturns: true,
   allowOfflineRentals: false,
+  // Team decision 2026-11-27: open Mon–Fri 9–5; rental and late time count only then.
+  operatingHoursStart: '09:00',
+  operatingHoursEnd: '17:00',
+  operatingDays: [1, 2, 3, 4, 5],
+  closedDates: [],
+  pauseClockOutsideHours: true,
 };
 
 /**

@@ -7,6 +7,9 @@ import {
   RentalStatus,
   RfidState,
   isLockerAssignable,
+  isOpenAt,
+  nextOpening,
+  operatingCalendar,
   parseStudentQr,
   type SystemSettings,
 } from '@calc-rental/shared';
@@ -384,7 +387,7 @@ export class KioskController {
           this.services.returns.markOverdueRentals();
           this.services.payments.expireSessions(); // leftovers from a crash/reboot
         }
-        return this.show(LCD.ready(lockerStatusLine(this.lockerAvailability()))); // redrawn only on change
+        return this.show(this.idleScreen()); // redrawn only on change
 
       case KioskState.SELECTING_LOCKER:
         if (now > this.selection!.deadline) {
@@ -540,7 +543,16 @@ export class KioskController {
     this.move(KioskState.RENTAL_ACTIVE);
     this.holdUntil = now + this.messageMs;
     await this.hw.buzzer.beep('ok');
-    await this.show(LCD.rentalSuccess(dueAt));
+    await this.show(LCD.rentalSuccess(dueAt, new Date(now)));
+  }
+
+  /** Idle screen: locker status during operating hours, "returns only" outside them. */
+  private idleScreen(): LcdScreen {
+    const settings = this.store.getSettings();
+    const cal = settings ? operatingCalendar(settings) : null;
+    const now = this.now();
+    if (cal && !isOpenAt(now, cal)) return LCD.closedIdle(nextOpening(now, cal));
+    return LCD.ready(lockerStatusLine(this.lockerAvailability()));
   }
 
   /** Error beep + a screen that stays up for messageMs before live hints resume (flow continues). */
@@ -551,6 +563,9 @@ export class KioskController {
   }
 
   private async refuse(code: ErrorCode) {
+    if (code === ErrorCode.KIOSK_CLOSED) {
+      return this.message(LCD.closedForBorrowing(nextOpening(this.now(), operatingCalendar(this.settings()))), 'attention');
+    }
     await this.message(errorScreen(code), 'error');
   }
 
@@ -567,7 +582,7 @@ export class KioskController {
     this.flow = null;
     this.selection = null;
     await this.hw.coins.setEnabled(false);
-    await this.show(LCD.ready(lockerStatusLine(this.lockerAvailability())));
+    await this.show(this.idleScreen());
   }
 
   private move(to: KioskState) {

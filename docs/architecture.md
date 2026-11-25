@@ -104,6 +104,12 @@ Why not one global secret in `.env`? Per-device credentials can be revoked indiv
 ### 3.7 Time
 All databases store **UTC** (`timestamptz` in PostgreSQL, ISO-8601 strings in SQLite). Only the UI and the LCD convert to `Asia/Manila`, using helpers in `packages/shared/src/time.ts`.
 
+**Operating hours (decided 2026-11-27).** Settings define the opening hours (default Mon–Fri 9:00–17:00 Manila), closed dates, and `pauseClockOutsideHours` (default on).
+- **Borrowing** is refused outside operating hours (`KIOSK_CLOSED`, LCD `KIOSK CLOSED / OPEN WED 9:00AM`). **Returns** are always accepted.
+- With pausing on, **due time** = rented_at + duration counted only in open hours (`addOperatingMinutes`), and **lateness** = open minutes after due_at (`operatingMinutesBetween`). This replaces "late time keeps counting overnight". Example: rented Tue 15:00 for 3 h → due Wed 10:00.
+- The same rule runs on the kiosk (TypeScript, `packages/shared/src/rental/operating-hours.ts`) and in Supabase (`operating_minutes_between()`, used by `v_rentals.overdue_minutes_now`). Tests check that both give the same answers. Manila has no DST, so it's always UTC+8.
+- A rental keeps the settings snapshot from when it started.
+
 With SQLite-first, the **Pi's clock** sets `rented_at` and `due_at`. The Pi 4 has no battery-backed clock, so:
 - On boot, the kiosk stays in a **STARTING / "Please wait"** state until the system clock has synced over the internet (NTP). Only then does it accept rentals.
 - When syncing, the server compares the Pi's clock with its own and records any drift as a `WARNING` device event.

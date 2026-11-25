@@ -13,6 +13,7 @@ import { KioskState, canMove } from './kiosk-states';
 // Fake identities only.
 const JUAN = 'JUAN DELA CRUZ\t2022100001\tBSCpE';
 const ANA_BLOCKED = 'ANA GARCIA\t2022100004\tBSCpE';
+const DEV_STUDENT_QR_MARIA = 'MARIA SANTOS\t2023100002\tBSCE';
 const SECOND = 1000;
 const HOUR = 3600 * SECOND;
 
@@ -387,6 +388,41 @@ describe('restart recovery', () => {
     await kiosk.handleScan(JUAN);
     await restart();
     expect(store.getRental(rentalId)!.status).toBe(RentalStatus.ACTIVE);
+  });
+});
+
+describe('operating hours (Mon–Fri 9 AM–5 PM, clock pauses while closed)', () => {
+  it('a rental at 3 PM is due the next morning, shown with the weekday', async () => {
+    clock = new Date('2026-10-20T07:00:00.000Z'); // Tue 3:00 PM Manila
+    await kiosk.handleScan(JUAN);
+    await blue(1);
+    await coin(20);
+    hw.rfid.place(1, null);
+    await advance(SECOND);
+    await red(1);
+    expect(lcd()).toEqual(['RENTAL SUCCESS', 'DUE WED 10:00 AM']);
+    expect(store.db.prepare(`SELECT due_at FROM rentals`).get()).toEqual({ due_at: '2026-10-21T02:00:01.000Z' });
+  });
+
+  it('after hours: idle screen says returns only, borrowing is refused, returns still work', async () => {
+    const rentalId = await borrow(); // Tue 10:00 AM, due 1:00 PM
+    clock = new Date('2026-10-20T11:00:00.000Z'); // Tue 7:00 PM: closed
+    await advance(SECOND);
+    expect(lcd()).toEqual(['RETURNS ONLY', 'OPEN WED 9:00AM']);
+
+    await kiosk.handleScan(DEV_STUDENT_QR_MARIA);
+    expect(lcd()).toEqual(['KIOSK CLOSED', 'OPEN WED 9:00AM']);
+    await advance(3 * SECOND);
+
+    // Juan returns at 7 PM: due 1 PM, the kiosk closed at 5 PM → 4 h late, not 6 h.
+    await kiosk.handleScan(JUAN);
+    expect(lcd()).toEqual(['LATE 3H59M', 'PAY PENALTY P30']);
+    await coin(20);
+    await coin(10);
+    hw.rfid.place(1, DEV_RFID.calc1);
+    await red(1);
+    expect(kiosk.state).toBe(KioskState.RETURN_COMPLETE);
+    expect(store.getRental(rentalId)!.overdue_minutes).toBe(239);
   });
 });
 
