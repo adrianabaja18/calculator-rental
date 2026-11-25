@@ -65,7 +65,8 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 1 | Relay module polarity | — | ✅ **Active-LOW** (ACE 6345 2-channel optocoupler board), GPIO 5/6 |
 | 2 | LCD size | — | ✅ **16×2** (confirmed 2026-11-17); all messages fit 16 characters |
 | 3 | 3rd relay for the coin selector | — | ✅ **Not fitted** (idle coins are logged for refund) |
-| 4 | Door reed switches | — | ✅ **Not fitted** (returns complete on RFID; `DOOR_PINS` adds them later) |
+| 4 | Door switches | — | ✅ **One push button per locker**, pressed by the closed door, GPIO 22/23 (`DOOR_PINS=22,23`, decided 2026-11-25) |
+| 4b | Solenoid lock type (slanted latch or flat bolt) | Phase 11 bring-up | ⏳ The software assumes a **slanted latch** that catches by itself when the door is pushed shut. Tell the lead if it's a flat bolt. |
 | 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 bring-up | ⏳ Read them with `npm run hwcheck:pi` → `watch` |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
 | — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, keeps counting overnight, **paid before the return locker opens** (2026-11-18). Editable on the Settings page. |
@@ -159,6 +160,15 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 ---
 
 ## 6. Phase 11 hand-off: real hardware drivers
+
+### Phase 11b update (2026-11-25): door switches, real RFID UIDs, config fix
+- **Door switches:** one button per locker, pressed by the closed door (GPIO 22/23, wiring in `docs/raspberry-pi.md` §3.7).
+  - Borrow: the new kiosk state `WAITING_FOR_DOOR_CLOSE` holds `RENTAL SUCCESS` until the door is shut.
+  - Return: it completes only with the door shut. If the door is left open until the timeout, the return still completes (the right calculator is in) and a warning is logged.
+  - The door state is also saved to the kiosk database for the dashboard.
+- **`hwcheck:pi`** now shows the door switches in `rfid` and `watch`.
+- **Real tag UIDs:** run `npm run seed:pi -- --rfid1 <uid> --rfid2 <uid>`.
+- **Bug fixed:** the `.env` pin settings (`RELAY_PINS`, `RFID_SPI`, `DOOR_PINS`) were rejected because their patterns were missing backslashes. The defaults worked, but any value in `.env` stopped the kiosk at startup.
 
 ### Decisions (2026-11-19)
 - **Hardware I/O through a small Python helper** (`apps/raspberry-pi/hw-bridge/hw_bridge.py`), chosen by the team over pure TypeScript.

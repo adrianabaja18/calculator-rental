@@ -156,6 +156,37 @@ describe('borrowing (spec §5)', () => {
     expect(store.db.prepare(`SELECT status FROM rentals`).get()).toEqual({ status: 'FAILED' });
   });
 
+  it('with a door switch: waits for the door to close before RENTAL SUCCESS', async () => {
+    hw.lockers.setDoor(1, DoorState.CLOSED);
+    await kiosk.handleScan(JUAN);
+    await kiosk.handleCoin({ eventId: 'c1', pulseCount: 20, occurredAt: clock.toISOString() });
+    hw.lockers.setDoor(1, DoorState.OPEN); // student opens the door
+    hw.rfid.place(1, null);
+    await advance(SECOND);
+    expect(kiosk.state).toBe(KioskState.WAITING_FOR_DOOR_CLOSE);
+    expect(lcd()).toEqual(['PLEASE CLOSE', 'THE LOCKER DOOR']);
+    expect(store.db.prepare(`SELECT status FROM rentals`).get()).toEqual({ status: 'ACTIVE' }); // the calculator is out
+    expect(store.db.prepare(`SELECT door_state FROM lockers WHERE locker_number = 1`).get()).toEqual({ door_state: 'OPEN' });
+
+    hw.lockers.setDoor(1, DoorState.CLOSED);
+    await advance(SECOND);
+    expect(kiosk.state).toBe(KioskState.RENTAL_ACTIVE);
+    expect(lcd()).toEqual(['RENTAL SUCCESS', 'DUE AT 01:00 PM']);
+  });
+
+  it('with a door switch: a door left open is reported, the rental stays active', async () => {
+    await kiosk.handleScan(JUAN);
+    await kiosk.handleCoin({ eventId: 'c1', pulseCount: 20, occurredAt: clock.toISOString() });
+    hw.lockers.setDoor(1, DoorState.OPEN);
+    hw.rfid.place(1, null);
+    await advance(SECOND);
+    await advance((DEV_SETTINGS.removalTimeoutSeconds + 1) * SECOND);
+    expect(lcd()).toEqual(['DOOR LEFT OPEN', 'SEE AN OFFICER']);
+    expect(store.db.prepare(`SELECT status FROM rentals`).get()).toEqual({ status: 'ACTIVE' });
+    await advance(3 * SECOND);
+    expect(kiosk.state).toBe(KioskState.SYSTEM_READY);
+  });
+
   it('records a coin inserted while idle for refund', async () => {
     await kiosk.handleCoin({ eventId: 'stray', pulseCount: 5, occurredAt: clock.toISOString() });
     expect(store.db.prepare(`SELECT payment_id FROM coin_events`).get()).toEqual({ payment_id: null });
@@ -235,6 +266,19 @@ describe('returning (spec §6)', () => {
     hw.lockers.setDoor(1, DoorState.CLOSED);
     await advance(SECOND);
     expect(kiosk.state).toBe(KioskState.RETURN_COMPLETE);
+  });
+
+  it('right calculator back but door left open: completes at the timeout instead of cancelling', async () => {
+    const rentalId = await borrow();
+    await kiosk.handleScan(JUAN);
+    hw.lockers.setDoor(1, DoorState.OPEN);
+    hw.rfid.place(1, DEV_RFID.calc1);
+    await advance(SECOND);
+    expect(lcd()).toEqual(['PLEASE CLOSE', 'THE LOCKER DOOR']);
+    await advance((DEV_SETTINGS.returnTimeoutSeconds + 1) * SECOND);
+    expect(kiosk.state).toBe(KioskState.RETURN_COMPLETE);
+    expect(lcd()).toEqual(['DOOR LEFT OPEN', 'SEE AN OFFICER']);
+    expect(store.getRental(rentalId)!.status).toBe(RentalStatus.COMPLETED);
   });
 
   it('gives up after the return timeout and keeps the rental open', async () => {

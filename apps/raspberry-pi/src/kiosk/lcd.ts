@@ -50,6 +50,8 @@ export const LCD = {
   penaltyNotPaid: () => screen('RETURN CANCELLED', 'PENALTY NOT PAID'),
   removalTimeout: () => screen('NOT TAKEN', 'SEE AN OFFICER'),
   returnTimeout: () => screen('RETURN CANCELLED', 'NOT RETURNED'),
+  closeDoor: () => screen('PLEASE CLOSE', 'THE LOCKER DOOR'),
+  doorLeftOpen: () => screen('DOOR LEFT OPEN', 'SEE AN OFFICER'),
   systemError: () => screen('SYSTEM ERROR', 'SEE AN OFFICER'),
 } as const;
 
@@ -71,7 +73,7 @@ export function errorScreen(code: ErrorCode): LcdScreen {
     case ErrorCode.RFID_NOT_DETECTED:
       return screen('CALCULATOR', 'NOT DETECTED');
     case ErrorCode.LOCKER_CLOSE_FAILED:
-      return screen('PLEASE CLOSE', 'THE LOCKER DOOR');
+      return LCD.closeDoor();
     case ErrorCode.PAYMENT_TIMEOUT:
       return LCD.paymentTimeout();
     case ErrorCode.DATABASE_UNAVAILABLE:
