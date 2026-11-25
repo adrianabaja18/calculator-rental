@@ -123,6 +123,15 @@ describe('selectLockerForRental', () => {
     expect(result).toMatchObject({ ok: true, locker: { lockerNumber: 1 }, calculator: { code: 'CALC-001' } });
   });
 
+  it('uses the locker the student chose, and refuses it if it is not ready', () => {
+    expect(selectLockerForRental([locker(1), locker(2)], 2)).toMatchObject({ ok: true, locker: { lockerNumber: 2 } });
+    expect(selectLockerForRental([locker(1), locker(2, { hasOpenRental: true })], 2)).toMatchObject({
+      ok: false,
+      code: ErrorCode.NO_CALCULATOR_AVAILABLE,
+      message: 'Locker 2 is not available.',
+    });
+  });
+
   it('skips a locker whose RFID reader does NOT see the calculator (spec §5.14)', () => {
     const result = selectLockerForRental([
       locker(1, { rfidState: RfidState.NO_TAG, detectedRfidUid: null }),

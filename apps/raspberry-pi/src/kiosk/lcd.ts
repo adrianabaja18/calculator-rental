@@ -30,7 +30,11 @@ const hours = (minutes: number) => (minutes % 60 === 0 ? `${minutes / 60} HOUR${
 export const LCD = {
   starting: () => screen('STARTING...', 'PLEASE WAIT'),
   waitingForClock: () => screen('PLEASE WAIT', 'SYNCING CLOCK'),
-  ready: () => screen('SYSTEM READY', 'SCAN STUDENT ID'),
+  /** Idle: invite a scan and show every locker's status (e.g. "1:READY 2:N/A"). */
+  ready: (status: string) => screen('SCAN STUDENT ID', status),
+  pickLocker: (status: string) => screen('PUSH BLUE BUTTON', status),
+  lockerUnavailable: (lockerNumber: number, status: string) => screen(`LOCKER ${lockerNumber} N/A`, status),
+  selectTimeout: () => screen('NO LOCKER PICKED', 'PLEASE TRY AGAIN'),
   checking: () => screen('CHECKING ID...', 'PLEASE WAIT'),
   quote: (name: string, feeCentavos: number, durationMinutes: number) =>
     screen(name, `${peso(feeCentavos)} / ${hours(durationMinutes)}`),
@@ -50,10 +54,16 @@ export const LCD = {
   penaltyNotPaid: () => screen('RETURN CANCELLED', 'PENALTY NOT PAID'),
   removalTimeout: () => screen('NOT TAKEN', 'SEE AN OFFICER'),
   returnTimeout: () => screen('RETURN CANCELLED', 'NOT RETURNED'),
+  closeAndPressRed: () => screen('CLOSE THE DOOR', 'PUSH RED BUTTON'),
   closeDoor: () => screen('PLEASE CLOSE', 'THE LOCKER DOOR'),
   doorLeftOpen: () => screen('DOOR LEFT OPEN', 'SEE AN OFFICER'),
   systemError: () => screen('SYSTEM ERROR', 'SEE AN OFFICER'),
 } as const;
+
+/** One status word per locker for the 16-column LCD: READY = has a calculator you can rent now. */
+export function lockerStatusLine(lockers: ReadonlyArray<{ number: number; available: boolean }>): string {
+  return lockers.map((l) => `${l.number}:${l.available ? 'READY' : 'N/A'}`).join(' ');
+}
 
 /** Refusal screens keyed by the error code the services return. */
 export function errorScreen(code: ErrorCode): LcdScreen {

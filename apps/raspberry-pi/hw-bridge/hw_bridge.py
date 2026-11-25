@@ -9,18 +9,21 @@ official, preinstalled libraries (gpiozero) plus spidev and smbus2.
 Protocol: one JSON object per line.
   Node -> bridge (stdin), each with an "id":
     {"id":1,"cmd":"ping"}
-    {"id":2,"cmd":"unlock","channel":1,"ms":3000}     pulse a solenoid relay
+    {"id":2,"cmd":"unlock","channel":1,"ms":60000}    relay ON (solenoid unlocked) for up to ms
+    {"id":7,"cmd":"lock","channel":1}                 relay OFF now (red button pressed)
     {"id":3,"cmd":"lcd","lines":["SYSTEM READY","SCAN STUDENT ID"]}
     {"id":4,"cmd":"beep","pattern":"ok"|"error"|"attention"}
     {"id":5,"cmd":"read_rfid","channel":1}
     {"id":6,"cmd":"door","channel":1}
     mock mode only: {"cmd":"mock_coin","pulses":5}  {"cmd":"mock_tag","channel":1,"uid":"04-..."|null}
+                    {"cmd":"mock_button","kind":"select"|"close","channel":1}
   bridge -> Node (stdout):
     {"type":"ready","mode":"real"|"mock","version":"1.0.0","devices":{...}}
     {"type":"ok","id":2}  {"type":"pong","id":1}
     {"type":"rfid","id":5,"uid":"04-A1-B2-C3-D4"|null,"readerOk":true}
     {"type":"door","id":6,"state":"UNKNOWN"}
     {"type":"coin","pulses":5}                         one finished coin
+    {"type":"button","kind":"select","channel":1}      blue (select) / red (close) button pressed
     {"type":"error","id":2,"message":"..."}  {"type":"log","level":"warn","message":"..."}
 
 Run:  python3 hw_bridge.py --mock            (laptop / tests)
@@ -32,7 +35,7 @@ import sys
 import threading
 import time
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 _out_lock = threading.Lock()
 
 
@@ -258,10 +261,13 @@ class MockHardware:
         self.unlocks = []
 
     def devices(self):
-        return {"relays": True, "coin": True, "rfid": True, "lcd": True, "buzzer": True}
+        return {"relays": True, "coin": True, "rfid": True, "lcd": True, "buzzer": True, "buttons": True}
 
     def unlock(self, channel, ms):
         self.unlocks.append((channel, ms))
+
+    def lock(self, channel):
+        pass
 
     def lcd(self, lines):
         self.lcd_lines = lines
@@ -286,6 +292,9 @@ class MockHardware:
     def mock_tag(self, channel, uid):
         self.tags[channel] = uid
 
+    def mock_button(self, kind, channel):
+        emit({"type": "button", "kind": kind, "channel": channel})
+
 
 class RealHardware:
     """Raspberry Pi I/O. Each device is optional: a missing one is reported, not fatal."""
@@ -297,6 +306,7 @@ class RealHardware:
 
         self.coins = coins
         self.relays = {}
+        self.relay_timers = {}
         for channel, pin in enumerate(args.relay_pins, start=1):
             # Active-LOW relay board: "on" drives the pin LOW. initial_value=False keeps it off (HIGH).
             self.relays[channel] = OutputDevice(pin, active_high=not args.relay_active_low, initial_value=False)
@@ -312,6 +322,14 @@ class RealHardware:
         self.doors = {}
         for channel, pin in enumerate(args.door_pins, start=1):
             self.doors[channel] = Button(pin, pull_up=True)  # reed switch to GND: closed door = pressed
+
+        # Front-panel buttons (microswitch COM -> GND, NO -> pin): blue = select locker, red = door closed.
+        self.buttons = []
+        for kind, pins in (("select", args.select_pins), ("close", args.close_pins)):
+            for channel, pin in enumerate(pins, start=1):
+                button = Button(pin, pull_up=True, bounce_time=0.05)
+                button.when_pressed = lambda k=kind, c=channel: emit({"type": "button", "kind": k, "channel": c})
+                self.buttons.append(button)
 
         self.readers = {}
         for channel, (bus, device) in enumerate(args.rfid, start=1):
@@ -337,16 +355,31 @@ class RealHardware:
             "lcd": self.display is not None,
             "buzzer": self.buzzer is not None,
             "doors": sorted(self.doors.keys()),
+            "buttons": len(self.buttons),
         }
 
     def unlock(self, channel, ms):
         relay = self.relays.get(channel)
         if relay is None:
             raise ValueError("no relay for channel %d" % channel)
+        self._cancel_timer(channel)
         relay.on()
-        timer = threading.Timer(ms / 1000.0, relay.off)  # always released, never held
+        timer = threading.Timer(ms / 1000.0, relay.off)  # safety: always released after ms, even if Node dies
         timer.daemon = True
         timer.start()
+        self.relay_timers[channel] = timer
+
+    def lock(self, channel):
+        relay = self.relays.get(channel)
+        if relay is None:
+            raise ValueError("no relay for channel %d" % channel)
+        self._cancel_timer(channel)
+        relay.off()
+
+    def _cancel_timer(self, channel):
+        timer = self.relay_timers.pop(channel, None)
+        if timer:
+            timer.cancel()
 
     def lcd(self, lines):
         if self.display:
@@ -383,9 +416,12 @@ def handle(hw, msg):
             return {"type": "pong", "id": rid}
         if cmd == "unlock":
             ms = int(msg.get("ms", 3000))
-            if not 100 <= ms <= 10000:
-                raise ValueError("unlock pulse must be 100..10000 ms")
+            if not 100 <= ms <= 300000:
+                raise ValueError("unlock time must be 100..300000 ms")
             hw.unlock(int(msg["channel"]), ms)
+            return {"type": "ok", "id": rid}
+        if cmd == "lock":
+            hw.lock(int(msg["channel"]))
             return {"type": "ok", "id": rid}
         if cmd == "lcd":
             lines = msg.get("lines") or ["", ""]
@@ -404,6 +440,9 @@ def handle(hw, msg):
             return {"type": "ok", "id": rid}
         if cmd == "mock_tag" and hw.mode == "mock":
             hw.mock_tag(int(msg["channel"]), msg.get("uid"))
+            return {"type": "ok", "id": rid}
+        if cmd == "mock_button" and hw.mode == "mock":
+            hw.mock_button(str(msg["kind"]), int(msg["channel"]))
             return {"type": "ok", "id": rid}
         raise ValueError("unknown command: %s" % cmd)
     except Exception as exc:  # noqa: BLE001
@@ -426,6 +465,8 @@ def parse_args(argv):
     p.add_argument("--buzzer-pin", type=int, default=18)
     p.add_argument("--buzzer-active-low", action="store_true", help="buzzer module sounds when the pin is LOW")
     p.add_argument("--door-pins", type=int_list, default=[], help="reed switch BCM pins per channel (optional)")
+    p.add_argument("--select-pins", type=int_list, default=[], help="blue 'select locker' button pins per channel")
+    p.add_argument("--close-pins", type=int_list, default=[], help="red 'door closed' button pins per channel")
     p.add_argument("--rfid", type=spi_list, default=[(0, 0), (0, 1)], help="SPI bus.device per channel (default 0.0,0.1)")
     p.add_argument("--i2c-bus", type=int, default=1)
     p.add_argument("--lcd-address", type=lambda s: int(s, 0), default=0x27)

@@ -24,6 +24,8 @@ const CALC_UIDS: Record<string, string> = { '1': DEV_RFID.calc1, '2': DEV_RFID.c
 const HELP = `
   Mock kiosk controls (type and press Enter):
     juan | maria | pedro | carlo | ana   scan that student's ID   (ana is blocked)
+    blue <locker>                        press that locker's BLUE button (choose locker)
+    red <locker>                         press that locker's RED button (door closed -> lock)
     coin <1|5|10|20>                     insert a coin
     take <locker>                        remove the calculator from a locker
     put <locker> <calc>                  place CALC-00<calc> into a locker (e.g. put 1 2 = wrong one)
@@ -52,6 +54,11 @@ export function startMockConsole(opts: {
     const [cmd = '', a, b] = line.trim().toLowerCase().split(/\s+/);
     if (STUDENTS[cmd]) return void kiosk.handleScan(STUDENTS[cmd]); // works with the real scanner too
     switch (cmd) {
+      case 'blue':
+      case 'red': {
+        const ch = channelOf(a ?? '');
+        return ch ? hw.buttons.press(cmd === 'blue' ? 'select' : 'close', ch) : console.log(`  usage: ${cmd} <locker>`);
+      }
       case 'coin':
         return hw.coins.insert(Number(a));
       case 'take': {

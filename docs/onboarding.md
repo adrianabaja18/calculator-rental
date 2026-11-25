@@ -65,8 +65,8 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 1 | Relay module polarity | — | ✅ **Active-LOW** (ACE 6345 2-channel optocoupler board), GPIO 5/6 |
 | 2 | LCD size | — | ✅ **16×2** (confirmed 2026-11-17); all messages fit 16 characters |
 | 3 | 3rd relay for the coin selector | — | ✅ **Not fitted** (idle coins are logged for refund) |
-| 4 | Door switches | — | ✅ **One push button per locker**, pressed by the closed door, GPIO 22/23 (`DOOR_PINS=22,23`, decided 2026-11-25) |
-| 4b | Solenoid lock type (slanted latch or flat bolt) | Phase 11 bring-up | ⏳ The software assumes a **slanted latch** that catches by itself when the door is pushed shut. Tell the lead if it's a flat bolt. |
+| 4 | Front-panel buttons | — | ✅ **Blue + red arcade button per locker** (decided 2026-11-25). Blue chooses the locker (GPIO 24/25); red = "door closed", which locks it (GPIO 22/23). No door sensors. |
+| 4b | Solenoid heat when held unlocked | Phase 11 bring-up | ⏳ The lock is held ON until the red button is pressed (up to 60/90 s). Run the heat check in `docs/raspberry-pi.md` §3.1; if the lock gets too hot, lower the removal/return timeouts in Settings. |
 | 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 bring-up | ⏳ Read them with `npm run hwcheck:pi` → `watch` |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
 | — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, keeps counting overnight, **paid before the return locker opens** (2026-11-18). Editable on the Settings page. |
@@ -161,12 +161,28 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ## 6. Phase 11 hand-off: real hardware drivers
 
-### Phase 11b update (2026-11-25): door switches, real RFID UIDs, config fix
-- **Door switches:** one button per locker, pressed by the closed door (GPIO 22/23, wiring in `docs/raspberry-pi.md` §3.7).
-  - Borrow: the new kiosk state `WAITING_FOR_DOOR_CLOSE` holds `RENTAL SUCCESS` until the door is shut.
-  - Return: it completes only with the door shut. If the door is left open until the timeout, the return still completes (the right calculator is in) and a warning is logged.
-  - The door state is also saved to the kiosk database for the dashboard.
-- **`hwcheck:pi`** now shows the door switches in `rfid` and `watch`.
+### Phase 11c update (2026-11-25): blue/red front-panel buttons
+The team built a front panel: `[BLUE 1] [RED 1]  [LCD]  [BLUE 2] [RED 2]`. Wiring is in `docs/raspberry-pi.md` §3.7, and the student steps are in `docs/renter-guide.md`.
+- **Idle LCD:** `SCAN STUDENT ID` / `1:READY 2:N/A`, kept up to date from the RFID readers.
+- **Borrow:**
+  - The student scans their ID. A blocked or ineligible student is refused right away (`RentalService.checkRental`, read-only).
+  - New state `SELECTING_LOCKER`: the student presses the **blue** button of a READY locker within 30 s. `startRental(qr, lockerNumber)` reserves exactly that locker.
+  - They pay, then the locker is **held unlocked**. They take the calculator, and the LCD shows `CLOSE THE DOOR` / `PUSH RED BUTTON`. The **red** button locks the locker and shows RENTAL SUCCESS.
+- **Return:**
+  - The locker is held unlocked. The LCD gives live hints from the RFID reader (return-to, wrong calculator, or close and push red).
+  - **Red** checks the RFID. The right calculator → locks → RETURN SUCCESS. Wrong or missing → the locker stays unlocked so the student can fix it.
+- **Locks:**
+  - `LockerController.unlock(channel, maxMs)` holds the relay, and the new `lock(channel)` releases it.
+  - The bridge turns the relay off at `maxMs` (the removal or return timeout) even if Node dies. Every timeout and crash path locks.
+- **Config:**
+  - New settings `SELECT_BUTTON_PINS=24,25` and `CLOSE_BUTTON_PINS=22,23`. `DOOR_PINS` is back to empty.
+  - The config rejects a GPIO pin used twice. ⚠️ If your `.env` still has `DOOR_PINS=22,23`, clear it.
+- **Tools:**
+  - `hwcheck:pi` prints button presses and has a new `lock <n>` command.
+  - The mock console has `blue <n>` and `red <n>`.
+- **Replaces** the door-switch-only flow from Phase 11b.
+
+### Phase 11b update (2026-11-25): real RFID UIDs, config fix
 - **Real tag UIDs:** run `npm run seed:pi -- --rfid1 <uid> --rfid2 <uid>`.
 - **Bug fixed:** the `.env` pin settings (`RELAY_PINS`, `RFID_SPI`, `DOOR_PINS`) were rejected because their patterns were missing backslashes. The defaults worked, but any value in `.env` stopped the kiosk at startup.
 
@@ -283,6 +299,7 @@ Delivered as **three PRs**:
 - **Mock console:** `npm run start:pi` (mock mode) runs the real kiosk process and lets you play the student and the sensors from the keyboard:
   ```
   juan | maria | pedro | carlo | ana     scan an ID (ana is blocked)
+  blue 1 | red 1                         press Locker 1's blue (choose) / red (door closed) button (Phase 11c)
   coin 20                                insert a coin (1, 5, 10, 20)
   take 1                                 take the calculator out of Locker 1
   put 1 1                                put CALC-001 into Locker 1 (put 1 2 = wrong calculator)

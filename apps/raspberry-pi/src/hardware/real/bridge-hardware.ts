@@ -5,6 +5,8 @@ import type { LcdScreen } from '../../kiosk/lcd';
 import type { CoinInput } from '../../payment/payment-service';
 import type {
   BeepPattern,
+  ButtonKind,
+  ButtonPanel,
   BuzzerController,
   ClockSource,
   CoinAcceptor,
@@ -43,8 +45,11 @@ export class BridgeRFIDReader implements RFIDReader {
 
 export class BridgeLockerController implements LockerController {
   constructor(private readonly bridge: BridgeClient) {}
-  async unlock(channel: number, pulseMs: number) {
-    await this.bridge.request('unlock', { channel, ms: pulseMs });
+  async unlock(channel: number, maxMs: number) {
+    await this.bridge.request('unlock', { channel, ms: maxMs });
+  }
+  async lock(channel: number) {
+    await this.bridge.request('lock', { channel });
   }
   async doorState(channel: number) {
     try {
@@ -53,6 +58,13 @@ export class BridgeLockerController implements LockerController {
     } catch {
       return DoorState.UNKNOWN;
     }
+  }
+}
+
+export class BridgeButtons implements ButtonPanel {
+  constructor(private readonly bridge: BridgeClient) {}
+  onPress(handler: (kind: ButtonKind, channel: number) => void) {
+    this.bridge.onButton(handler);
   }
 }
 

@@ -68,22 +68,35 @@ export class RentalService {
   }
 
   // -------------------------------------------------------------------------
-  startRental(qrRaw: string): ServiceResult<{ quote: RentalQuote }> {
+  /**
+   * Read-only pre-check right after the scan, before the student picks a locker:
+   * a refused student (blocked, unpaid penalty, already renting) is told at once.
+   * startRental() repeats every check atomically when the locker is chosen.
+   */
+  checkRental(qrRaw: string): ServiceResult<{ fullName: string }> {
+    const qr = parseStudentQr(qrRaw);
+    if (!qr.ok) return this.invalidQr(qrRaw, qr.reason);
+    const settings = this.store.getSettings();
+    if (!settings) return fail(ErrorCode.DATABASE_UNAVAILABLE, 'The kiosk has not received its settings yet.');
+    const student = this.store.findStudentByNumber(qr.data.studentNumber);
+    const openRental = student ? this.store.getOpenRentalForStudent(student.id) : null;
+    const eligibility = checkBorrowEligibility({
+      student: student ? { status: student.status } : null,
+      openRental: openRental ? { status: openRental.status } : null,
+      unpaidPenaltyTotal: student ? this.store.getUnpaidPenaltyCentavos(student.id) / 100 : 0,
+      settings,
+    });
+    return eligibility.ok ? { ok: true, fullName: qr.data.fullName } : eligibility;
+  }
+
+  /** `lockerNumber` = the locker the student chose; omitted = first available. */
+  startRental(qrRaw: string, lockerNumber?: number): ServiceResult<{ quote: RentalQuote }> {
     const now = this.now();
     const nowIso = now.toISOString();
 
     // 1. Never trust what the scanner decoded (Rule 14).
     const qr = parseStudentQr(qrRaw);
-    if (!qr.ok) {
-      this.store.recordEvent({
-        type: EventType.QR_INVALID,
-        severity: EventSeverity.WARNING,
-        message: qr.reason,
-        payload: { length: qrRaw.length },
-        occurredAt: nowIso,
-      });
-      return fail(ErrorCode.INVALID_QR, 'This QR code is not a valid school ID.');
-    }
+    if (!qr.ok) return this.invalidQr(qrRaw, qr.reason);
 
     const settings = this.store.getSettings();
     if (!settings) {
@@ -147,7 +160,7 @@ export class RentalService {
             occurredAt: nowIso,
           });
         }
-        const choice = selectLockerForRental(lockers);
+        const choice = selectLockerForRental(lockers, lockerNumber);
         if (!choice.ok) return choice;
 
         // Reserve: create the rental and hold the locker (spec §5 step 17).
@@ -203,6 +216,17 @@ export class RentalService {
       }
       throw error;
     }
+  }
+
+  private invalidQr(qrRaw: string, reason: string) {
+    this.store.recordEvent({
+      type: EventType.QR_INVALID,
+      severity: EventSeverity.WARNING,
+      message: reason,
+      payload: { length: qrRaw.length },
+      occurredAt: this.now().toISOString(),
+    });
+    return fail(ErrorCode.INVALID_QR, 'This QR code is not a valid school ID.');
   }
 
   // -------------------------------------------------------------------------

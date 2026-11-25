@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ErrorCode } from '@calc-rental/shared';
-import { LCD, LCD_COLUMNS, errorScreen, screen } from './lcd';
+import { LCD, LCD_COLUMNS, errorScreen, lockerStatusLine, screen } from './lcd';
 
 const fits = (s: readonly [string, string]) => s.every((line) => line.length === LCD_COLUMNS && /^[\x20-\x7E]*$/.test(line));
 
@@ -15,7 +15,13 @@ describe('16x2 LCD screens', () => {
   });
 
   it('formats the spec messages', () => {
-    expect(LCD.ready()).toEqual(screen('SYSTEM READY', 'SCAN STUDENT ID'));
+    const status = lockerStatusLine([{ number: 1, available: true }, { number: 2, available: false }]);
+    expect(status).toBe('1:READY 2:N/A');
+    expect(LCD.ready(status)).toEqual(screen('SCAN STUDENT ID', '1:READY 2:N/A'));
+    expect(LCD.pickLocker(status)).toEqual(screen('PUSH BLUE BUTTON', '1:READY 2:N/A'));
+    expect(LCD.lockerUnavailable(2, status)).toEqual(screen('LOCKER 2 N/A', '1:READY 2:N/A'));
+    expect(LCD.closeAndPressRed()).toEqual(screen('CLOSE THE DOOR', 'PUSH RED BUTTON'));
+    expect(lockerStatusLine([{ number: 1, available: true }, { number: 2, available: true }]).length).toBeLessThanOrEqual(16);
     expect(LCD.quote('JUAN DELA CRUZ', 2000, 180)).toEqual(screen('JUAN DELA CRUZ', 'P20 / 3 HOURS'));
     expect(LCD.payment(500, 2000)).toEqual(screen('PAYMENT P5/P20', 'INSERT COINS'));
     expect(LCD.lockerOpen(1)).toEqual(screen('LOCKER 1 OPEN', 'TAKE CALCULATOR'));
@@ -32,7 +38,10 @@ describe('16x2 LCD screens', () => {
     const all = [
       LCD.starting(),
       LCD.waitingForClock(),
-      LCD.ready(),
+      LCD.ready('1:READY 2:N/A'),
+      LCD.pickLocker('1:READY 2:N/A'),
+      LCD.selectTimeout(),
+      LCD.closeAndPressRed(),
       LCD.checking(),
       LCD.quote('MARIA CLARA DE LOS SANTOS', 2000, 180),
       LCD.payment(2000, 2000),
