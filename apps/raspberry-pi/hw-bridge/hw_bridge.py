@@ -35,7 +35,7 @@ import sys
 import threading
 import time
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 _out_lock = threading.Lock()
 
 
@@ -79,7 +79,8 @@ class PulseCounter:
 
 # --------------------------------------------------------------------------
 # MFRC522 (RC522) over SPI — enough to read a tag's UID (4 or 7 bytes).
-# RST can be tied to 3.3 V; the chip is reset by software.
+# RST goes to a GPIO (--rfid-rst-pins, held HIGH by the bridge) or straight to 3.3 V;
+# either way the chip is also soft-reset here.
 # The antenna is switched on only while reading, so two readers don't
 # interfere and the tag power-cycles (fresh REQA every poll).
 # --------------------------------------------------------------------------
@@ -331,6 +332,16 @@ class RealHardware:
                 button.when_pressed = lambda k=kind, c=channel: emit({"type": "button", "kind": k, "channel": c})
                 self.buttons.append(button)
 
+        # RC522 RST wired to GPIOs (final wiring: GPIO 4 and 16). LOW = chip held in reset,
+        # so hard-reset each reader once and then keep RST HIGH for as long as the bridge runs.
+        # (GPIO 16 defaults to pull-DOWN at boot, which would keep reader 2 off.)
+        self.rfid_resets = [OutputDevice(pin, initial_value=False) for pin in args.rfid_rst_pins]
+        if self.rfid_resets:
+            time.sleep(0.05)
+            for rst in self.rfid_resets:
+                rst.on()
+            time.sleep(0.05)  # oscillator start-up after reset
+
         self.readers = {}
         for channel, (bus, device) in enumerate(args.rfid, start=1):
             try:
@@ -468,6 +479,7 @@ def parse_args(argv):
     p.add_argument("--select-pins", type=int_list, default=[], help="blue 'select locker' button pins per channel")
     p.add_argument("--close-pins", type=int_list, default=[], help="red 'door closed' button pins per channel")
     p.add_argument("--rfid", type=spi_list, default=[(0, 0), (0, 1)], help="SPI bus.device per channel (default 0.0,0.1)")
+    p.add_argument("--rfid-rst-pins", type=int_list, default=[], help="RC522 RST BCM pins (held HIGH); empty = RST tied to 3.3 V")
     p.add_argument("--i2c-bus", type=int, default=1)
     p.add_argument("--lcd-address", type=lambda s: int(s, 0), default=0x27)
     return p.parse_args(argv)

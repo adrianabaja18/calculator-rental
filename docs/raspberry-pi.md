@@ -49,9 +49,14 @@ The software side is `apps/raspberry-pi` (Node.js kiosk) and `apps/raspberry-pi/
 | RED button → Locker 2 | GPIO 23 | 16 | |
 | BLUE button → Locker 1 | GPIO 24 | 18 | `SELECT_BUTTON_PINS=24,25` |
 | BLUE button → Locker 2 | GPIO 25 | 22 | |
-| 3.3 V (RC522s, PC817 output side) | — | 1, 17 | |
-| 5 V (relay module, LCD) | — | 2, 4 | |
-| GND (everything, common) | — | 6, 9, 14, 20, 25, 30, 34, 39 | |
+| RC522 #1 RST | GPIO 4 | 7 | `RFID_RST_PINS=4,16` (held HIGH by the bridge) |
+| RC522 #2 RST | GPIO 16 | 36 | |
+| 3.3 V → both RC522 3.3V | — | 1 | |
+| 3.3 V → PC817 10 kΩ pull-up (to GPIO 17) | — | 17 | |
+| 5 V → LCD (pin 2); relay module VCC (pin 4) | — | 2, 4 | |
+| GND → PC817 emitter (pin 20); everything else on the GND rail | — | 6, 9, 14, 20, 25, 30, 34, 39 | |
+
+*Final working wiring confirmed by the team on 2026-11-26.*
 
 **Why GPIO 5 and 6 for the relays:** these pins are pulled **HIGH** while the Pi boots, and HIGH means OFF for an active-LOW relay board. So the solenoids **cannot fire during boot**.
 
@@ -59,7 +64,7 @@ The software side is `apps/raspberry-pi` (Node.js kiosk) and `apps/raspberry-pi/
 
 ### 3.1 Relay module → solenoid locks
 ```
-Pi pin 2  (5V)  ── VCC          Relay COM1 ── +12 V
+Pi pin 4  (5V)  ── VCC          Relay COM1 ── +12 V
 Pi pin 6  (GND) ── GND          Relay NO1  ── Solenoid 1 (+)   Solenoid 1 (−) ── 12 V GND
 Pi pin 29 (GPIO5) ─ IN1         Relay COM2 ── +12 V
 Pi pin 31 (GPIO6) ─ IN2         Relay NO2  ── Solenoid 2 (+)   Solenoid 2 (−) ── 12 V GND
@@ -80,8 +85,8 @@ The Allan 1239 runs on 12 V. Its **COIN** wire pulses LOW once per peso (program
 ```
 COIN SELECTOR SIDE (12 V)                 PI SIDE (3.3 V)
 +12 V ── 2.2 kΩ ── PC817 pin 1 (anode)    PC817 pin 4 (collector) ── GPIO 17 (pin 11)
-COIN wire ──────── PC817 pin 2 (cathode)  PC817 pin 3 (emitter)   ── Pi GND
-Selector GND ── 12 V GND                  (GPIO 17 uses the Pi's internal pull-up)
+COIN wire ──────── PC817 pin 2 (cathode)  PC817 pin 4 ── 10 kΩ ── 3.3 V (pin 17)  (pull-up)
+Selector GND ── 12 V GND                  PC817 pin 3 (emitter)   ── GND (pin 20)
 ```
 - **PC817 module board** (with screw terminals): wire **IN+ → +12 V** and **IN− → COIN**. On the output side, **OUT → GPIO 17** and **GND → Pi GND**. If the module has a VCC pin for its output pull-up, connect it to **3.3 V, never 5 V**.
 - Selector switches:
@@ -99,11 +104,11 @@ Selector GND ── 12 V GND                  (GPIO 17 uses the Pi's internal pu
 | MISO | pin 21 | pin 21 |
 | IRQ | not connected | not connected |
 | GND | GND | GND |
-| RST | **3.3 V** | **3.3 V** |
+| RST | **GPIO 4 / pin 7** | **GPIO 16 / pin 36** |
 | 3.3V | pin 1 / 17 | pin 1 / 17 |
 
 - **3.3 V only.** Powering an RC522 from 5 V damages it.
-- **RST is tied to 3.3 V.** The software resets the chip itself, which saves two GPIOs compared with the earlier plan.
+- **RST goes to GPIO 4 (reader 1) and GPIO 16 (reader 2).** At start-up the bridge pulses both LOW for 50 ms (hard reset), then **holds them HIGH**. A reader whose RST is LOW is switched off and shows `NOT RESPONDING`. GPIO 16 is pulled LOW by default at boot, so this step is required. If you ever tie RST straight to 3.3 V instead, set `RFID_RST_PINS=` (empty).
 - Each antenna is switched on **only while it's reading**, so the two readers don't interfere. Still keep them **≥ 10 cm apart**.
 - Mount each tag where it sits **flat over its reader** when the calculator is stowed. Batteries and metal reduce range.
 
