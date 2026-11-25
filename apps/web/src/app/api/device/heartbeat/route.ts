@@ -50,11 +50,29 @@ export async function POST(request: Request) {
       cpu_temp_c: beat.cpuTempC,
       sync_queue_count: beat.syncQueueCount,
       local_db_ok: beat.localDbOk,
-      health: beat.localDbOk && clockOk ? 'OK' : 'DEGRADED',
-      last_health: { kioskState: beat.kioskState, clockDriftSeconds },
+      health: beat.localDbOk && clockOk && !beat.sync?.failedItems ? 'OK' : 'DEGRADED',
+      last_health: { kioskState: beat.kioskState, clockDriftSeconds, sync: beat.sync ?? null },
     })
     .eq('id', auth.device.id);
   if (error) return jsonError(ErrorCode.DATABASE_UNAVAILABLE, 'Could not record heartbeat.', 503);
+
+  // Live sensor state (Phase 12): only the latest reading matters, so it rides on
+  // the heartbeat instead of filling the outbox. Only this kiosk's lockers.
+  await Promise.all(
+    (beat.lockers ?? []).map((l) =>
+      db
+        .from('lockers')
+        .update({
+          lock_state: l.lockState,
+          door_state: l.doorState,
+          rfid_state: l.rfidState,
+          last_detected_rfid_uid: l.detectedRfidUid,
+          last_seen_at: l.lastSeenAt,
+        })
+        .eq('id', l.id)
+        .eq('device_id', auth.device.id),
+    ),
+  );
 
   if (!clockOk) {
     await db.from('device_events').insert({

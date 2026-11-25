@@ -137,6 +137,35 @@ The kiosk must keep working 24/7 even if the internet drops, so the **Pi's SQLit
 
 **Power-off safety:** SQLite runs in WAL mode with `synchronous=FULL`, so committed records survive a power cut. Pulling the plug can still damage the SD card's file system, so Phase 15 adds a safe-shutdown button or a read-only root file system.
 
+### 3.9 Two-way sync as built (Phase 12)
+```
+ KIOSK (SQLite)                                  SUPABASE
+ every change ─► sync_queue (outbox)
+ every 10 s:  POST /api/device/sync  ─────────►  apply_kiosk_sync(): items applied IN ORDER,
+              {items:[{seq,entity,payload}]}     one sub-transaction each; reply says how far
+              ◄─── {appliedThroughSeq, failure}   it got → kiosk marks those synced
+ every 60 s:  GET  /api/device/sync  ─────────►  settings + this kiosk's lockers + calculators
+              ?students=…&penalties=…            (complete) + students/penalties changed since
+              ◄─── officer data (paged)           the cursors → kiosk.applyPull()
+ every 30 s:  POST /api/device/heartbeat  ────►  online status, sync health, live locker sensors
+```
+**Outbox entities:** `student`, `rental`, `payment`, `penalty`, `coin_event`, `device_event`, `locker_state`, `calculator_state`. Each payload is the full SQLite row at the time of the change, so re-sending is harmless.
+
+**Who wins (field ownership)**
+| Kiosk owns | Officers own (dashboard) |
+|---|---|
+| Rentals, payments, coins, device events | Settings |
+| Student name/course (from their ID scans), new students | Student status and blocked reason |
+| Penalty amounts and coin payments | Penalty **waivers** (merged: `calculated − waived − paid`) |
+| Workflow statuses: locker RESERVED/OPEN/RENTED/RETURNING/AVAILABLE, calculator RENTED/AVAILABLE | Locker number/name/channel; calculator code/model/**RFID UID**/locker/condition |
+| Live sensor state (via heartbeat) | Out-of-service statuses: locker MAINTENANCE, calculator MAINTENANCE/MISSING/DISABLED |
+
+- The kiosk's `AVAILABLE` never ends an officer's maintenance. A workflow status (the locker is actually in use) is always recorded.
+- On the kiosk, an officer status is applied only when no rental is using that locker or calculator.
+- A rental an officer resolved by hand (`resolved_by`) is never overwritten by the kiosk.
+
+**Failures:** if Supabase refuses an item, nothing after it is applied, and the kiosk retries it with back-off (10 s, 20 s, 40 s … up to 10 min). After 20 attempts the item is set aside (`failed_at`), a CRITICAL `SYNC_FAILED` event is logged, and the rest continue. The heartbeat reports `failedItems`, which marks the device DEGRADED on the dashboard. Synced outbox rows are deleted after 7 days.
+
 ## 4. Folder structure
 
 ```

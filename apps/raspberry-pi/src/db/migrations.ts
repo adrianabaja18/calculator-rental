@@ -248,4 +248,33 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX sync_queue_pending_idx ON sync_queue (seq) WHERE synced_at IS NULL;
     `,
   },
+  {
+    version: 5,
+    name: 'two_way_sync',
+    sql: `
+      -- Officers can waive penalties on the dashboard (pulled down by sync).
+      ALTER TABLE penalties ADD COLUMN waived_centavos INTEGER NOT NULL DEFAULT 0 CHECK (waived_centavos >= 0);
+
+      -- Outbox rebuilt once more: the entity list is now checked in TypeScript
+      -- (SYNC_ENTITIES), so new entities need no table rebuild; failed_at marks
+      -- an item given up after too many attempts so it can't block the queue.
+      CREATE TABLE sync_queue_new (
+        seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity          TEXT NOT NULL,
+        entity_id       TEXT NOT NULL,
+        payload         TEXT NOT NULL CHECK (json_valid(payload)),
+        created_at      TEXT NOT NULL DEFAULT ${SQL_UTC_NOW},
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        last_error      TEXT,
+        next_attempt_at TEXT,
+        synced_at       TEXT,
+        failed_at       TEXT
+      ) STRICT;
+      INSERT INTO sync_queue_new (seq, entity, entity_id, payload, created_at, attempts, last_error, next_attempt_at, synced_at)
+        SELECT seq, entity, entity_id, payload, created_at, attempts, last_error, next_attempt_at, synced_at FROM sync_queue;
+      DROP TABLE sync_queue;
+      ALTER TABLE sync_queue_new RENAME TO sync_queue;
+      CREATE INDEX sync_queue_pending_idx ON sync_queue (seq) WHERE synced_at IS NULL AND failed_at IS NULL;
+    `,
+  },
 ];

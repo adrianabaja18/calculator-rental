@@ -23,6 +23,7 @@ import { logger } from './logger';
 import { PaymentService } from './payment/payment-service';
 import { RentalService } from './rental/rental-service';
 import { ReturnService } from './rental/return-service';
+import { SyncService } from './sync/sync-service';
 
 /**
  * Raspberry Pi kiosk service.
@@ -30,7 +31,8 @@ import { ReturnService } from './rental/return-service';
  *   1. validates configuration and opens the local SQLite database (main DB),
  *   2. builds the hardware: HARDWARE_MODE=mock (laptop console) or real (Pi, via the Python bridge),
  *   3. runs the kiosk state machine (tick every 250 ms),
- *   4. sends a heartbeat every 30 s (device-authenticated; sync arrives in Phase 12),
+ *   4. syncs with Supabase (Phase 12: outbox push every 10 s, officer data pull every 60 s)
+ *      and sends a device-authenticated heartbeat every 30 s,
  *   5. shuts down cleanly on Ctrl+C / systemd stop.
  */
 
@@ -123,6 +125,12 @@ async function main(): Promise<void> {
     deviceId: config.DEVICE_ID,
     deviceSecret: config.DEVICE_SECRET,
   });
+  const sync = new SyncService(store, backend, {
+    now,
+    log: (level, message, data) => logger[level]({ event: 'SYNC', ...data }, message),
+  });
+  sync.start();
+
   let backendOnline: boolean | null = null;
   const heartbeat = async () => {
     const result = await backend.heartbeat({
@@ -132,6 +140,8 @@ async function main(): Promise<void> {
       localDbOk: db.pragma('quick_check', { simple: true }) === 'ok',
       cpuTempC: readCpuTemperature(),
       sentAt: now().toISOString(),
+      lockers: store.lockerSensorReports(),
+      sync: sync.status(),
     });
     if (result.ok !== backendOnline) {
       if (result.ok) logger.info({ event: 'DEVICE_ONLINE', latencyMs: result.latencyMs }, 'Backend reachable, heartbeat accepted');
@@ -152,6 +162,7 @@ async function main(): Promise<void> {
     logger.info({ event: 'SERVICE_STOPPING', signal }, 'Shutting down');
     clearInterval(ticker);
     clearInterval(connectivity);
+    sync.stop();
     console_?.close();
     bridge?.stop();
     serialScanner?.stop();

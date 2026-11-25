@@ -3,9 +3,14 @@ import {
   ErrorCode,
   HealthResponseSchema,
   HeartbeatResponseSchema,
+  SyncPullResponseSchema,
+  SyncPushResponseSchema,
   type HealthReport,
   type HeartbeatReply,
   type HeartbeatRequest,
+  type SyncPullReply,
+  type SyncPushReply,
+  type SyncPushRequest,
 } from '@calc-rental/shared';
 import type { z } from 'zod';
 
@@ -45,6 +50,26 @@ export class BackendClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.deviceHeaders() },
       body: JSON.stringify(beat),
+    });
+  }
+
+  /** Phase 12: send outbox items (in order); the reply says how far Supabase got. */
+  async syncPush(batch: SyncPushRequest): Promise<BackendResult<SyncPushReply>> {
+    return this.request('/api/device/sync', SyncPushResponseSchema, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...this.deviceHeaders() },
+      body: JSON.stringify(batch),
+    });
+  }
+
+  /** Phase 12: officer data changed since the given cursors (null = everything). */
+  async syncPull(cursors: { students: string | null; penalties: string | null }): Promise<BackendResult<SyncPullReply>> {
+    const query = new URLSearchParams();
+    if (cursors.students) query.set('students', cursors.students);
+    if (cursors.penalties) query.set('penalties', cursors.penalties);
+    const qs = query.toString();
+    return this.request(`/api/device/sync${qs ? `?${qs}` : ''}`, SyncPullResponseSchema, {
+      headers: this.deviceHeaders(),
     });
   }
 

@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-19, end of **Phase 11** (real hardware drivers)
+> **Last updated:** 2026-11-27, end of **Phase 12** (two-way sync)
 
 ---
 
@@ -46,8 +46,8 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 8 | Realtime dashboard: summary cards, Active Rentals countdowns, live updates | ✅ Done and verified |
 | 9 | Raspberry Pi service: state machine, mock hardware, 16×2 LCD messages, device login + heartbeat | ✅ Done and verified |
 | 10 | ESP32-CAM QR firmware + serial link | ✅ Done and verified on the real board |
-| 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer (Python helper) | ✅ Built and tested in software. ⏳ Bring-up on the Pi (§6). |
-| 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ⬜ Next |
+| 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer, front-panel buttons (Python helper) | ✅ Built and tested in software. ⏳ Bring-up on the Pi (§6.0g). |
+| 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ✅ Built and tested in software. ⏳ Needs `db:push` + a run against the live project (§6). |
 | 13 | Error handling, audit logs, device monitoring | ⬜ |
 | 14 | Testing, simulator, system validation | ⬜ |
 | 15 | Deployment and final documentation | ⬜ |
@@ -67,7 +67,7 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 3 | 3rd relay for the coin selector | — | ✅ **Not fitted** (idle coins are logged for refund) |
 | 4 | Front-panel buttons | — | ✅ **Blue + red arcade button per locker** (decided 2026-11-25). Blue chooses the locker (GPIO 24/25); red = "door closed", which locks it (GPIO 22/23). No door sensors. |
 | 4b | Solenoid heat when held unlocked | Phase 11 bring-up | ⏳ The lock is held ON until the red button is pressed (up to 60/90 s). Run the heat check in `docs/raspberry-pi.md` §3.1; if the lock gets too hot, lower the removal/return timeouts in Settings. |
-| 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 bring-up | ⏳ Read them with `npm run hwcheck:pi` → `watch` |
+| 5 | Real **RFID UIDs** of the two calculator tags | Phase 12 | ✅ Tag A `FE-AC-31-03` → CALC-001 (Locker 1), tag B `57-99-3B-03` → CALC-002 (Locker 2). ⚠️ **Enter them on the dashboard** (Calculators → Edit) before running the kiosk with sync, or the dashboard's fake seed UIDs replace them on the kiosk. |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
 | — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, keeps counting overnight, **paid before the return locker opens** (2026-11-18). Editable on the Settings page. |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
@@ -159,7 +159,46 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 11 hand-off: real hardware drivers
+## 6. Phase 12 hand-off: two-way sync (kiosk SQLite ⇄ Supabase)
+
+### What it does
+- **Push** (every 10 s): the kiosk's outbox goes to Supabase in order. That covers rentals, returns, payments, coins, penalties, events, locker and calculator statuses, and new students. The dashboard now shows real kiosk activity.
+- **Pull** (every 60 s): officer changes reach the kiosk. That covers Settings, locker and calculator setup (**RFID UIDs**), maintenance, student blocks and penalty waivers. This replaces `npm run seed:pi` for real data.
+- **Heartbeat** (every 30 s) also carries each locker's live sensor state and the sync health.
+- Offline-first: with no internet the kiosk keeps working, and the outbox waits.
+- Who wins when both sides change something: [architecture.md §3.9](architecture.md).
+
+### Built
+| Where | What |
+|---|---|
+| `supabase/migrations/20261127000100_kiosk_sync.sql` | `apply_kiosk_sync(device, items)`: one sub-transaction per item, stops at the first refused item. Merge rules (maintenance, penalty waivers, resolved rentals). New `device_registry.last_sync_at / last_pull_at / last_sync_error`. |
+| `apps/web/src/app/api/device/sync/route.ts` | `POST` push, `GET` pull (paged by `updated_at` cursors). Device-authenticated like the heartbeat. |
+| `packages/shared/src/sync.ts` | Zod contract for push, pull and heartbeat extras (validated on both sides). |
+| `apps/raspberry-pi/src/sync/sync-service.ts` | Push and pull loops, back-off (10 s … 10 min), sets an item aside after 20 attempts (CRITICAL `SYNC_FAILED` event), prunes synced rows after 7 days. |
+| `apps/raspberry-pi/src/db/` | SQLite **v5**: `penalties.waived_centavos`, outbox `failed_at`. `KioskStore.applyPull()` applies officer data without echoing it back. Calculator status changes now go into the outbox. |
+| Tests | `supabase-sync.test.ts` runs **real kiosk flows into the real Supabase migrations** (PGlite). `sync-service.test.ts` covers back-off, offline, paging, swapped RFID UIDs, maintenance, blocks and waivers. |
+
+### Set it up (lead, once)
+1. Merge the PR, then push the migration:
+   ```bash
+   npm run db:push
+   ```
+2. Regenerate the types (optional; the PR already includes the new ones):
+   ```bash
+   npm run db:types
+   ```
+3. **On the dashboard, set the real tag UIDs:** CALC-001 → `FE-AC-31-03`, CALC-002 → `57-99-3B-03`. After that, the dashboard is where UIDs are changed. `seed:pi` is for laptops only.
+4. On the Pi, `BACKEND_URL` must point at the web app (a laptop's `http://<ip>:3000` now, Vercel in Phase 15), and `DEVICE_SECRET` must match the device's hash in Supabase.
+
+### Phase 12 verification checklist
+- [ ] `npm test` passes (318 tests). The sync tests need no internet.
+- [ ] With the web app running and the kiosk started, after ~10 s the kiosk log shows no `Sync:` warnings. **Devices** later shows the last sync time (Phase 13 page).
+- [ ] Do a mock borrow (`start:pi`: `juan`, `blue 1`, `coin 20`, `take 1`, `red 1`). Within ~10 s **Active Rentals** on the dashboard shows Juan's rental.
+- [ ] Put Locker 2 in maintenance on the dashboard. Within ~60 s the kiosk's LCD shows `2:N/A`.
+- [ ] Block a student on the dashboard. Within ~60 s that student's scan shows `ACCOUNT BLOCKED`.
+- [ ] Stop the web app, do a borrow, then restart the web app. The rental appears once the kiosk reconnects (nothing lost, nothing doubled).
+
+## 6.0g Phase 11 hand-off (completed in software): real hardware drivers
 
 ### Phase 11d update (2026-11-26): final wiring, RC522 RST on GPIO
 The team confirmed the final wiring. It matches the code except for these changes:

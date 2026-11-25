@@ -378,6 +378,9 @@ export type Database = {
           is_enabled: boolean
           last_health: Json
           last_heartbeat_at: string | null
+          last_pull_at: string | null
+          last_sync_at: string | null
+          last_sync_error: string | null
           local_db_ok: boolean | null
           location: string | null
           name: string
@@ -397,6 +400,9 @@ export type Database = {
           is_enabled?: boolean
           last_health?: Json
           last_heartbeat_at?: string | null
+          last_pull_at?: string | null
+          last_sync_at?: string | null
+          last_sync_error?: string | null
           local_db_ok?: boolean | null
           location?: string | null
           name: string
@@ -416,6 +422,9 @@ export type Database = {
           is_enabled?: boolean
           last_health?: Json
           last_heartbeat_at?: string | null
+          last_pull_at?: string | null
+          last_sync_at?: string | null
+          last_sync_error?: string | null
           local_db_ok?: boolean | null
           location?: string | null
           name?: string
@@ -1423,6 +1432,10 @@ export type Database = {
       is_admin: { Args: never; Returns: boolean }
       is_officer: { Args: never; Returns: boolean }
       is_super_admin: { Args: never; Returns: boolean }
+      apply_kiosk_sync: {
+        Args: { p_device_id: string; p_items: Json }
+        Returns: Json
+      }
     }
     Enums: {
       actor_type: "ADMIN" | "DEVICE" | "SYSTEM"
