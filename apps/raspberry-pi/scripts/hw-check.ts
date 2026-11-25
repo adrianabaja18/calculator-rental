@@ -8,8 +8,8 @@
  *   lcd [text]        show text (default: a test pattern)
  *   beep [ok|error|attention]
  *   unlock <locker>   pulse that locker's relay/solenoid (LOCK_PULSE_MS)
- *   rfid              read every reader once (shows real tag UIDs)
- *   watch             keep reading RFID; prints whenever a tag appears/leaves (Enter stops)
+ *   rfid              read every reader (and door switch, if DOOR_PINS is set) once
+ *   watch             keep reading; prints whenever a tag appears/leaves or a door opens/closes (Enter stops)
  *   quit
  * Coins are printed automatically as they are inserted.
  */
@@ -37,11 +37,14 @@ if (!ready) {
   process.exit(1);
 }
 console.log(`\nHardware bridge ${ready.version} (${ready.mode}) — devices found:`, ready.devices);
-console.log(`Pins: relays ${config.RELAY_PINS} (${config.RELAY_ACTIVE_LOW ? 'active-LOW' : 'active-HIGH'}), coin ${config.COIN_PIN}, buzzer ${config.BUZZER_PIN}, RFID SPI ${config.RFID_SPI}, LCD ${config.LCD_I2C_ADDRESS}`);
+console.log(`Pins: relays ${config.RELAY_PINS} (${config.RELAY_ACTIVE_LOW ? 'active-LOW' : 'active-HIGH'}), coin ${config.COIN_PIN}, buzzer ${config.BUZZER_PIN}, RFID SPI ${config.RFID_SPI}, LCD ${config.LCD_I2C_ADDRESS}, doors ${config.DOOR_PINS || 'none'}`);
 console.log('Commands: lcd [text] | beep [ok|error|attention] | unlock <1..n> | rfid | watch | quit\n');
 
 let watching: NodeJS.Timeout | null = null;
 const last = new Map<number, string | null>();
+
+const doors = config.DOOR_PINS ? config.DOOR_PINS.split(',').length : 0;
+const lastDoor = new Map<number, string>();
 
 async function readAll(onlyChanges: boolean) {
   for (let ch = 1; ch <= channels; ch++) {
@@ -50,6 +53,12 @@ async function readAll(onlyChanges: boolean) {
     if (onlyChanges && last.get(ch) === uid) continue;
     last.set(ch, uid);
     console.log(`  RFID reader ${ch}: ${r.readerOk ? (uid ? `tag ${uid}` : 'no tag') : 'NOT RESPONDING (check wiring / SPI enabled)'}`);
+  }
+  for (let ch = 1; ch <= doors; ch++) {
+    const state = String((await bridge.request('door', { channel: ch }).catch(() => ({ state: 'UNKNOWN' }))).state);
+    if (onlyChanges && lastDoor.get(ch) === state) continue;
+    lastDoor.set(ch, state);
+    console.log(`  Door switch ${ch}: ${state === 'CLOSED' ? 'CLOSED (pressed)' : state === 'OPEN' ? 'OPEN (released)' : state}`);
   }
 }
 
@@ -81,8 +90,9 @@ rl.on('line', async (line) => {
       case 'rfid':
         return await readAll(false);
       case 'watch':
-        console.log('  watching RFID readers… place/remove a calculator tag. Press Enter to stop.');
+        console.log('  watching RFID readers and door switches… place/remove a tag, open/close a door. Press Enter to stop.');
         last.clear();
+        lastDoor.clear();
         watching = setInterval(() => void readAll(true), 500);
         return;
       case 'quit':

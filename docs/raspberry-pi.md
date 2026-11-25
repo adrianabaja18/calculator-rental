@@ -21,10 +21,12 @@ The software side is `apps/raspberry-pi` (Node.js kiosk) and `apps/raspberry-pi/
 | ESP32-CAM + OV2640 on USB-C base | 1 | Pi USB port (`/dev/ttyUSB0`) |
 | 12 V adapter (≥ 3 A) | 1 | solenoids + coin selector |
 | 5.1 V / 3 A USB-C supply | 1 | Raspberry Pi |
+| Door switch per locker (push button or microswitch, pressed by the closed door) | 2 | GPIO 22, GPIO 23 |
 
 **Not fitted (decided 2026-11-19):**
 - **No 3rd relay** for the coin selector. It's always powered, so a coin inserted while idle is logged for an officer refund.
-- **No door reed switches.** A return completes on the RFID check alone. Both can be added later through `DOOR_PINS` in `.env`.
+
+**Door switches (added 2026-11-25):** each locker has a button on its frame that the closed door presses. A rental finishes only after the student shuts the door, and a return completes only with the right calculator inside **and** the door shut. Without switches, set `DOOR_PINS=` (empty) and the RFID check alone decides.
 
 ## 2. Pin map (BCM numbering)
 
@@ -41,6 +43,8 @@ The software side is `apps/raspberry-pi` (Node.js kiosk) and `apps/raspberry-pi/
 | RC522 MISO (both) | GPIO 9 | 21 | |
 | RC522 #1 SDA/SS → Locker 1 | GPIO 8 (CE0) | 24 | `RFID_SPI=0.0,0.1` |
 | RC522 #2 SDA/SS → Locker 2 | GPIO 7 (CE1) | 26 | |
+| Door switch → Locker 1 | GPIO 22 | 15 | `DOOR_PINS=22,23` |
+| Door switch → Locker 2 | GPIO 23 | 16 | |
 | 3.3 V (RC522s, PC817 output side) | — | 1, 17 | |
 | 5 V (relay module, LCD) | — | 2, 4 | |
 | GND (everything, common) | — | 6, 9, 14, 20, 25, 30, 34, 39 | |
@@ -115,6 +119,25 @@ LCD SDA ── GPIO 2 (pin 3)     LCD SCL ── GPIO 3 (pin 5)
 - Plug its USB-C base into a Pi USB port. It shows up as `/dev/ttyUSB0`.
 - A path that never changes is `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` (check with `ls /dev/serial/by-id/`). Put it in `SCANNER_PORT`.
 
+### 3.7 Door switches (×2)
+```
+Locker 1 switch: one leg ── GPIO 22 (pin 15)    other leg ── Pi GND
+Locker 2 switch: one leg ── GPIO 23 (pin 16)    other leg ── Pi GND
+```
+- No resistor: the Pi's internal pull-up is used. **Pressed = door CLOSED**, released = OPEN.
+- 3-terminal microswitch (COM/NO/NC): use **COM + NO**.
+- Mount it so the door presses it fully **only when the latch has caught**. If the button is pressed before the door is fully shut, the kiosk is told the door is closed too early.
+- Wire it to the **Pi's** GND, never the 12 V side.
+
+**What the kiosk does with it**
+| Step | Door switch | Kiosk |
+|---|---|---|
+| Borrow: calculator taken | still OPEN | LCD `PLEASE CLOSE / THE LOCKER DOOR` + beep; waits (removal timeout) |
+| Borrow: door shut | CLOSED | `RENTAL SUCCESS / DUE AT …` |
+| Borrow: never shut | OPEN at timeout | `DOOR LEFT OPEN / SEE AN OFFICER` (rental stays active, warning logged) |
+| Return: right calculator in | OPEN | `PLEASE CLOSE / THE LOCKER DOOR`; completes when CLOSED |
+| Return: right calculator in, never shut | OPEN at timeout | return **completes** (no extra penalty), `DOOR LEFT OPEN`, warning logged |
+
 ## 4. Power
 ```
 12 V adapter (≥3 A) ──┬── Relay COM1/COM2 → solenoids (flyback diodes!)
@@ -162,6 +185,7 @@ The tool prints which devices it found, then accepts commands. Work through it i
 | 3. Relays | `unlock 1`, `unlock 2` | that relay clicks ON, then OFF after 3 s, and the solenoid pulls |
 | 4. RFID | `watch`, then place/remove each calculator over its reader | `RFID reader 1: tag 04-…` / `no tag` |
 | 5. Coins | insert ₱1, ₱5, ₱10, ₱20 | `COIN: 5 pulse(s) = P5`, … |
+| 6. Door switches | `watch`, then open/close each door | `Door switch 1: CLOSED (pressed)` / `OPEN (released)` |
 
 **Write down the two tag UIDs from step 4.** They go into the dashboard (**Calculators → Edit → RFID tag UID**) and into the kiosk's local database (Phase 12 sync will do this automatically; until then pass them to the seed, using your own UIDs):
 

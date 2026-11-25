@@ -4,6 +4,7 @@ import {
   SystemSettingsSchema,
   type CalculatorCondition,
   type CalculatorStatus,
+  type DoorState,
   type EventSeverity,
   type EventType,
   type LockState,
@@ -266,13 +267,14 @@ export class KioskStore {
   /** Records what the locker's sensors report (called by the hardware layer, Phase 9/11). */
   setLockerSensors(
     lockerId: string,
-    sensors: { lockState?: LockState; rfidState?: RfidState; detectedRfidUid?: string | null },
+    sensors: { lockState?: LockState; rfidState?: RfidState; doorState?: DoorState; detectedRfidUid?: string | null },
     nowIso: string,
   ): void {
     this.db
       .prepare(
         `UPDATE lockers SET
            lock_state = COALESCE(@lockState, lock_state),
+           door_state = COALESCE(@doorState, door_state),
            rfid_state = COALESCE(@rfidState, rfid_state),
            last_detected_rfid_uid = CASE WHEN @setUid = 1 THEN @detectedRfidUid ELSE last_detected_rfid_uid END,
            last_seen_at = @now, updated_at = @now
@@ -282,6 +284,7 @@ export class KioskStore {
         lockerId,
         lockState: sensors.lockState ?? null,
         rfidState: sensors.rfidState ?? null,
+        doorState: sensors.doorState ?? null,
         setUid: sensors.detectedRfidUid === undefined ? 0 : 1,
         detectedRfidUid: sensors.detectedRfidUid ?? null,
         now: nowIso,

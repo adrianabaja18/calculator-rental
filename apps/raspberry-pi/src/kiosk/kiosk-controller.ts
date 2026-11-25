@@ -1,4 +1,5 @@
 import {
+  DoorState,
   ErrorCode,
   LockState,
   RentalStatus,
@@ -47,11 +48,14 @@ interface Flow {
   expectedUid: string | null;
   deadline: number;
   lastWrongUid?: string | null;
+  /** Set once the calculator is taken, while waiting for the door to close. */
+  dueAt?: string;
 }
 
 interface SensorSnapshot {
   rfidState: RfidState;
   uid: string | null;
+  door: DoorState;
   writtenAt: number;
 }
 
@@ -275,6 +279,9 @@ export class KioskController {
       case KioskState.WAITING_FOR_REMOVAL:
         return this.checkRemoval(now);
 
+      case KioskState.WAITING_FOR_DOOR_CLOSE:
+        return this.checkDoorClosed(now);
+
       case KioskState.WAITING_FOR_RETURN:
         return this.checkReturn(now);
 
@@ -306,17 +313,38 @@ export class KioskController {
     if (reading.readerOk && reading.uid !== flow.expectedUid) {
       const removed = this.services.rentals.confirmRemoval(flow.rentalId, { detectedRfidUid: reading.uid });
       if (removed.ok) {
-        this.move(KioskState.RENTAL_ACTIVE);
-        this.holdUntil = now + this.messageMs;
-        await this.hw.buzzer.beep('ok');
-        await this.show(LCD.rentalSuccess(removed.dueAt));
-        return;
+        // The rental is ACTIVE now (the calculator is out). With a door switch, finish only once the door is shut.
+        if ((await this.hw.lockers.doorState(flow.channel)) === DoorState.OPEN) {
+          flow.dueAt = removed.dueAt;
+          flow.deadline = now + this.settings().removalTimeoutSeconds * 1000;
+          this.move(KioskState.WAITING_FOR_DOOR_CLOSE);
+          await this.hw.buzzer.beep('attention');
+          await this.show(LCD.closeDoor());
+          return;
+        }
+        return this.rentalSuccess(now, removed.dueAt);
       }
     }
     if (now > flow.deadline) {
       this.services.rentals.failDispensing(flow.rentalId, 'CALCULATOR_NOT_REMOVED');
       await this.message(LCD.removalTimeout(), 'error');
     }
+  }
+
+  private async checkDoorClosed(now: number) {
+    const flow = this.flow!;
+    if ((await this.hw.lockers.doorState(flow.channel)) !== DoorState.OPEN) return this.rentalSuccess(now, flow.dueAt!);
+    if (now > flow.deadline) {
+      this.log('warn', 'Locker door left open after a rental', { rentalId: flow.rentalId, locker: flow.lockerNumber });
+      await this.message(LCD.doorLeftOpen(), 'attention');
+    }
+  }
+
+  private async rentalSuccess(now: number, dueAt: string) {
+    this.move(KioskState.RENTAL_ACTIVE);
+    this.holdUntil = now + this.messageMs;
+    await this.hw.buzzer.beep('ok');
+    await this.show(LCD.rentalSuccess(dueAt));
   }
 
   private async checkReturn(now: number) {
@@ -345,6 +373,19 @@ export class KioskController {
       }
     }
     if (now > flow.deadline) {
+      if (reading.readerOk && reading.uid && reading.uid === flow.expectedUid) {
+        // The right calculator is back but the door was left open. Don't cancel the
+        // return (the student would keep being charged): complete it and tell an officer.
+        const result = this.services.returns.verifyReturn(flow.rentalId, { detectedRfidUid: reading.uid, doorState: DoorState.UNKNOWN });
+        if (result.ok) {
+          this.log('warn', 'Locker door left open after a return', { rentalId: flow.rentalId, locker: flow.lockerNumber });
+          this.move(KioskState.RETURN_COMPLETE);
+          this.holdUntil = now + this.messageMs;
+          await this.hw.buzzer.beep('attention');
+          await this.show(LCD.doorLeftOpen());
+          return;
+        }
+      }
       this.services.returns.abandonReturn(flow.rentalId);
       await this.message(LCD.returnTimeout(), 'error');
     }
@@ -366,15 +407,16 @@ export class KioskController {
           : reading.uid === locker.expectedUid
             ? RfidState.EXPECTED_TAG
             : RfidState.WRONG_TAG;
+      const door = await this.hw.lockers.doorState(locker.channel);
       const previous = this.sensors.get(locker.id);
-      const changed = !previous || previous.rfidState !== rfidState || previous.uid !== reading.uid;
+      const changed = !previous || previous.rfidState !== rfidState || previous.uid !== reading.uid || previous.door !== door;
       if (!changed && now - previous.writtenAt < this.sensorWriteIntervalMs) continue;
       this.store.setLockerSensors(
         locker.id,
-        { rfidState, detectedRfidUid: reading.uid, lockState: LockState.LOCKED },
+        { rfidState, detectedRfidUid: reading.uid, lockState: LockState.LOCKED, doorState: door },
         new Date(now).toISOString(),
       );
-      this.sensors.set(locker.id, { rfidState, uid: reading.uid, writtenAt: now });
+      this.sensors.set(locker.id, { rfidState, uid: reading.uid, door, writtenAt: now });
     }
   }
 
