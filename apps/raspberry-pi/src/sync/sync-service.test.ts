@@ -75,7 +75,7 @@ beforeEach(() => {
   sent = [];
   pullReplies = [];
   pullCursors = [];
-  pushReply = (req) => ok({ appliedThroughSeq: req.items.at(-1)?.seq ?? null, applied: req.items.length, failure: null, serverTime: clock.toISOString() });
+  pushReply = (req) => ok({ appliedThroughSeq: req.items.at(-1)?.seq ?? null, applied: req.items.length, failure: null, serverTime: clock.toISOString(), commands: [] });
 });
 
 const sync = (opts = {}) => new SyncService(store, transport, { now: () => clock, batchSize: 3, ...opts });
@@ -99,7 +99,7 @@ describe('push', () => {
     expect(store.pendingSyncCount()).toBe(1);
     expect(s.status().lastError).toMatch(/offline/);
 
-    pushReply = (req) => ok({ appliedThroughSeq: req.items.at(-1)!.seq, applied: 1, failure: null, serverTime: clock.toISOString() });
+    pushReply = (req) => ok({ appliedThroughSeq: req.items.at(-1)!.seq, applied: 1, failure: null, serverTime: clock.toISOString(), commands: [] });
     expect(await s.push()).toEqual({ sent: 1, ok: true });
     expect(s.status().lastError).toBeNull();
   });
@@ -107,7 +107,7 @@ describe('push', () => {
   it('a refused item is retried later with back-off and nothing after it is skipped ahead', async () => {
     event('a');
     event('b');
-    pushReply = (req) => ok({ appliedThroughSeq: null, applied: 0, failure: { seq: req.items[0]!.seq, entity: 'device_event', message: 'boom' }, serverTime: clock.toISOString() });
+    pushReply = (req) => ok({ appliedThroughSeq: null, applied: 0, failure: { seq: req.items[0]!.seq, entity: 'device_event', message: 'boom' }, serverTime: clock.toISOString(), commands: [] });
     const s = sync();
     await s.push();
     expect(sent).toHaveLength(1);
@@ -124,8 +124,8 @@ describe('push', () => {
     event('fine');
     pushReply = (req) =>
       req.items[0]!.seq === 1
-        ? ok({ appliedThroughSeq: null, applied: 0, failure: { seq: 1, entity: 'device_event', message: 'bad row' }, serverTime: clock.toISOString() })
-        : ok({ appliedThroughSeq: req.items.at(-1)!.seq, applied: req.items.length, failure: null, serverTime: clock.toISOString() });
+        ? ok({ appliedThroughSeq: null, applied: 0, failure: { seq: 1, entity: 'device_event', message: 'bad row' }, serverTime: clock.toISOString(), commands: [] })
+        : ok({ appliedThroughSeq: req.items.at(-1)!.seq, applied: req.items.length, failure: null, serverTime: clock.toISOString(), commands: [] });
     const s = sync({ maxAttempts: 2 });
     await s.push();
     clock = new Date(clock.getTime() + 60_000);
@@ -136,6 +136,62 @@ describe('push', () => {
     await s.push();
     expect(store.pendingSyncCount()).toBe(0); // 'fine' and the SYNC_FAILED event went through
     expect(s.status().failedItems).toBe(1);
+  });
+});
+
+describe('officer commands (Phase 13)', () => {
+  const UNLOCK = { id: '00000000-0000-4000-8000-00000000c001', command: 'UNLOCK_LOCKER' as const, payload: { lockerId: DEV_IDS.locker1 }, requestedAt: '2026-10-20T02:00:00.000+00:00' };
+
+  it('polls even with an empty outbox, runs the command, and reports the result right away', async () => {
+    let handed = false;
+    pushReply = () => {
+      const commands = handed ? [] : [UNLOCK];
+      handed = true;
+      return ok({ appliedThroughSeq: null, applied: 0, failure: null, serverTime: clock.toISOString(), commands });
+    };
+    const s = sync();
+    const ran: string[] = [];
+    s.onCommand(async (cmd) => {
+      ran.push(String(cmd.payload.lockerId));
+      return { status: 'DONE', message: 'Locker 1 unlocked for 10 s.' };
+    });
+    await s.push();
+    expect(ran).toEqual([DEV_IDS.locker1]);
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.items).toEqual([]);
+    expect(sent[1]!.commandResults).toEqual([{ id: UNLOCK.id, status: 'DONE', message: 'Locker 1 unlocked for 10 s.' }]);
+  });
+
+  it('keeps a result when the network drops and delivers it on the next push', async () => {
+    let calls = 0;
+    pushReply = () => {
+      calls++;
+      if (calls === 1) return ok({ appliedThroughSeq: null, applied: 0, failure: null, serverTime: clock.toISOString(), commands: [UNLOCK] });
+      if (calls === 2) return offline;
+      return ok({ appliedThroughSeq: null, applied: 0, failure: null, serverTime: clock.toISOString(), commands: [] });
+    };
+    const s = sync();
+    s.onCommand(async () => ({ status: 'FAILED', message: 'busy' }));
+    await s.push();
+    await s.push();
+    expect(sent.at(-1)!.commandResults).toEqual([{ id: UNLOCK.id, status: 'FAILED', message: 'busy' }]);
+  });
+
+  it('REFRESH pulls officer data immediately', async () => {
+    pushReply = () =>
+      ok({
+        appliedThroughSeq: null,
+        applied: 0,
+        failure: null,
+        serverTime: clock.toISOString(),
+        commands: sent.length === 1 ? [{ ...UNLOCK, command: 'REFRESH' as const, payload: {} }] : [],
+      });
+    pullReplies.push(ok(pullReply({ settings: { ...SETTINGS_ROW, rental_fee: '30.00' } })));
+    const s = sync();
+    s.onCommand(async () => ({ status: 'DONE', message: '' }));
+    await s.push();
+    expect(store.getSettings()?.rentalFee).toBe(30);
+    expect(sent.at(-1)!.commandResults).toEqual([{ id: UNLOCK.id, status: 'DONE', message: 'Officer data refreshed.' }]);
   });
 });
 

@@ -1,28 +1,101 @@
 import type { Metadata } from 'next';
-import { AdminRole } from '@calc-rental/shared';
-import { ComingSoon } from '@/components/coming-soon';
+import { RentalStatus } from '@calc-rental/shared';
+import { LiveRefresh } from '@/components/live-refresh';
 import { PageHeader } from '@/components/page-header';
+import { StatusBadge } from '@/components/status-badge';
+import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
+import { FilterBar } from '@/components/ui/filter-bar';
 import { requireAdmin } from '@/lib/auth/session';
+import { cleanSearch, formatDateTime, formatPeso } from '@/lib/format';
+import { humanize, toneFor } from '@/lib/status-tones';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
 
-export const metadata: Metadata = { title: "Transaction History" };
+export const metadata: Metadata = { title: 'Transactions' };
 
-export default async function TransactionHistoryPage() {
-  await requireAdmin(AdminRole.VIEWER);
+const PAGE_LIMIT = 200;
+const LIVE_TABLES = ['rental_transactions', 'penalties'] as const;
+const STATUSES = Object.values(RentalStatus);
+
+export default async function TransactionsPage({ searchParams }: { searchParams: Promise<{ q?: string; status?: string }> }) {
+  await requireAdmin();
+  const params = await searchParams;
+  const q = cleanSearch(params.q);
+  const status = (STATUSES as string[]).includes(params.status ?? '') ? (params.status as RentalStatus) : '';
+
+  const supabase = await createSupabaseServerClient();
+  let query = supabase.from('v_rentals').select('*').order('created_at', { ascending: false }).limit(PAGE_LIMIT);
+  if (q) {
+    query = query.or(
+      `transaction_code.ilike.%${q}%,student_full_name.ilike.%${q}%,student_number.ilike.%${q}%,calculator_code.ilike.%${q}%`,
+    );
+  }
+  if (status) query = query.eq('status', status);
+  const { data: rentals, error } = await query;
+  if (error) throw new Error('Failed to load transactions');
 
   return (
     <>
       <PageHeader
-        title="Transaction History"
-        description="Every rental ever made — nothing is overwritten or deleted."
+        title="Transactions"
+        description="Every rental the kiosk recorded, newest first, including cancelled and failed ones. Records are never deleted."
+        actions={<LiveRefresh tables={LIVE_TABLES} />}
       />
-      <ComingSoon
-        phase={5}
-        features={[
-          "Filters: date, student, calculator, locker, status, payment, overdue",
-          "Search by transaction code",
-          "Transaction detail view with its events",
-        ]}
+      <FilterBar
+        q={q}
+        status={status}
+        statusOptions={STATUSES.map((s) => ({ value: s, label: humanize(s) }))}
+        placeholder="Code, student, student number or calculator"
       />
+      <TableCard footer={`${rentals.length} transaction${rentals.length === 1 ? '' : 's'}${rentals.length === PAGE_LIMIT ? ` (latest ${PAGE_LIMIT} shown)` : ''}`}>
+        <thead>
+          <tr>
+            <Th>Transaction</Th>
+            <Th>Student</Th>
+            <Th>Calculator</Th>
+            <Th>Borrowed</Th>
+            <Th>Due</Th>
+            <Th>Returned</Th>
+            <Th>Status</Th>
+            <Th className="text-right">Fee paid</Th>
+            <Th className="text-right">Penalty due</Th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rentals.length === 0 && (
+            <EmptyRow colSpan={9} title={q || status ? 'No transactions match your filters' : 'No transactions yet'} hint="Rentals appear after the kiosk syncs." />
+          )}
+          {rentals.map((r) => (
+            <tr key={r.id} className={r.effective_status === 'OVERDUE' ? 'bg-red-50/50' : 'hover:bg-slate-50'}>
+              <Td className="whitespace-nowrap">
+                <div className="font-medium text-slate-900">{r.transaction_code}</div>
+                <Sub>{formatDateTime(r.created_at)}</Sub>
+              </Td>
+              <Td>
+                {r.student_full_name}
+                <Sub>{r.student_number}</Sub>
+              </Td>
+              <Td className="whitespace-nowrap">
+                {r.calculator_code}
+                <Sub>{r.locker_name}</Sub>
+              </Td>
+              <Td className="whitespace-nowrap">{formatDateTime(r.rented_at)}</Td>
+              <Td className="whitespace-nowrap">{formatDateTime(r.due_at)}</Td>
+              <Td className="whitespace-nowrap">
+                {formatDateTime(r.returned_at)}
+                {r.was_overdue && <Sub>{r.overdue_minutes} min late</Sub>}
+              </Td>
+              <Td>
+                <StatusBadge tone={toneFor(r.effective_status)}>{humanize(r.effective_status)}</StatusBadge>
+                {r.failure_reason && <Sub>{humanize(r.failure_reason)}</Sub>}
+              </Td>
+              <Td className="text-right tabular-nums">{formatPeso(r.amount_paid)}</Td>
+              <Td className={`text-right tabular-nums ${Number(r.penalty_amount_due) > 0 ? 'font-semibold text-red-700' : 'text-slate-400'}`}>
+                {formatPeso(r.penalty_amount_due)}
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </TableCard>
     </>
   );
 }

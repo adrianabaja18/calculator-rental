@@ -12,7 +12,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
  * Officer actions on lockers.
  * Physical states (lock, door, RFID) are reported by the kiosk and are
  * read-only here; officers only control maintenance and labels.
- * Emergency unlock needs a command channel to the Pi (Phase 13).
+ * Emergency unlock lives on the Devices page (device commands, Phase 13).
  */
 
 const MaintenanceSchema = z.object({

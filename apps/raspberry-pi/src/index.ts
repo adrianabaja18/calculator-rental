@@ -129,6 +129,13 @@ async function main(): Promise<void> {
     now,
     log: (level, message, data) => logger[level]({ event: 'SYNC', ...data }, message),
   });
+  // Phase 13: emergency unlock requested by an officer on the Devices page.
+  sync.onCommand(async (cmd) => {
+    const lockerId = typeof cmd.payload.lockerId === 'string' ? cmd.payload.lockerId : '';
+    const requestedBy = typeof cmd.payload.requestedBy === 'string' ? cmd.payload.requestedBy : undefined;
+    const result = await kiosk.handleOfficerUnlock(lockerId, { commandId: cmd.id, requestedBy });
+    return { status: result.ok ? 'DONE' : 'FAILED', message: result.message };
+  });
   sync.start();
 
   let backendOnline: boolean | null = null;

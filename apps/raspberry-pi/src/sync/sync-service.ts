@@ -2,6 +2,8 @@ import {
   EventSeverity,
   EventType,
   systemSettingsFromRow,
+  type CommandResult,
+  type DeviceCommand,
   type SyncItem,
   type SyncStatusReport,
   type SystemSettings,
@@ -25,6 +27,7 @@ import { getLocalConfig, setLocalConfig } from '../db/sqlite';
  */
 
 export type SyncTransport = Pick<BackendClient, 'syncPush' | 'syncPull'>;
+export type CommandHandler = (command: DeviceCommand) => Promise<{ status: 'DONE' | 'FAILED'; message: string }>;
 
 export interface SyncOptions {
   now?: () => Date;
@@ -51,6 +54,8 @@ export class SyncService {
   private lastPushAt: string | null = null;
   private lastPullAt: string | null = null;
   private lastError: string | null = null;
+  private commandHandler: CommandHandler | null = null;
+  private readonly commandResults: CommandResult[] = [];
   private readonly now: () => Date;
   private readonly log: NonNullable<SyncOptions['log']>;
   private readonly batchSize: number;
@@ -67,6 +72,15 @@ export class SyncService {
     this.maxAttempts = options.maxAttempts ?? 20;
   }
 
+  /**
+   * Officer commands (Phase 13) arrive in push replies. REFRESH is handled
+   * here; everything else (emergency unlock) goes to `handler`.
+   * With a handler set, every push() also polls for commands.
+   */
+  onCommand(handler: CommandHandler): void {
+    this.commandHandler = handler;
+  }
+
   /** Sends pending outbox items until the queue is empty, an item is refused, or the network fails. */
   async push(): Promise<{ sent: number; ok: boolean }> {
     if (this.pushing) return { sent: 0, ok: true };
@@ -76,16 +90,21 @@ export class SyncService {
       for (let round = 0; round < MAX_ROUNDS; round++) {
         const now = this.now();
         const batch = this.store.nextSyncBatch(this.batchSize, now.toISOString());
-        if (batch.length === 0) break;
+        // Nothing to send: still ask once for officer commands, and deliver any results.
+        const poll = (round === 0 && this.commandHandler !== null) || this.commandResults.length > 0;
+        if (batch.length === 0 && !poll) break;
 
         const items: SyncItem[] = batch.map((b) => ({ seq: b.seq, entity: b.entity, payload: JSON.parse(b.payload) as Record<string, unknown> }));
-        const result = await this.transport.syncPush({ items });
+        const commandResults = this.commandResults.splice(0);
+        const result = await this.transport.syncPush({ items, commandResults });
         if (!result.ok) {
+          this.commandResults.unshift(...commandResults); // deliver them next time
           this.noteError(`push: ${result.message}`);
           return { sent, ok: false };
         }
 
         const reply = result.data;
+        await this.runCommands(reply.commands);
         if (reply.appliedThroughSeq !== null) {
           this.store.markSynced(reply.appliedThroughSeq, now.toISOString());
           sent += reply.applied;
@@ -109,11 +128,31 @@ export class SyncService {
 
         this.lastPushAt = now.toISOString();
         this.clearError();
-        if (batch.length < this.batchSize) break;
+        if (batch.length < this.batchSize && this.commandResults.length === 0) break;
       }
       return { sent, ok: true };
     } finally {
       this.pushing = false;
+    }
+  }
+
+  private async runCommands(commands: DeviceCommand[]): Promise<void> {
+    for (const cmd of commands) {
+      this.log('info', `Officer command ${cmd.command}`, { commandId: cmd.id, payload: cmd.payload });
+      let outcome: { status: 'DONE' | 'FAILED'; message: string };
+      try {
+        if (cmd.command === 'REFRESH') {
+          const pulled = await this.pull();
+          outcome = pulled.ok ? { status: 'DONE', message: 'Officer data refreshed.' } : { status: 'FAILED', message: 'Pull failed; will retry.' };
+        } else if (this.commandHandler) {
+          outcome = await this.commandHandler(cmd);
+        } else {
+          outcome = { status: 'FAILED', message: 'This kiosk cannot run that command.' };
+        }
+      } catch (error) {
+        outcome = { status: 'FAILED', message: error instanceof Error ? error.message : String(error) };
+      }
+      this.commandResults.push({ id: cmd.id, status: outcome.status, message: outcome.message.slice(0, 300) });
     }
   }
 

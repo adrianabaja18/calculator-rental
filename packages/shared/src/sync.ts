@@ -44,6 +44,31 @@ export const SYNC_PULL_PAGE_SIZE = 500;
 const timestamp = z.iso.datetime({ offset: true });
 const money = z.coerce.number().nonnegative();
 
+// ----------------------------------------------------------------- officer commands (Phase 13)
+/**
+ * Officer → kiosk instructions, delivered in the push reply (the kiosk syncs
+ * every ~10 s) and answered in the next push. Unanswered ones expire after 2 min.
+ *   UNLOCK_LOCKER  payload { lockerId }   emergency unlock (kiosk must be idle)
+ *   REFRESH        payload {}             pull officer data now
+ */
+export const DEVICE_COMMANDS = ['UNLOCK_LOCKER', 'REFRESH'] as const;
+export type DeviceCommandName = (typeof DEVICE_COMMANDS)[number];
+
+export const DeviceCommandSchema = z.object({
+  id: z.uuid(),
+  command: z.enum(DEVICE_COMMANDS),
+  payload: z.record(z.string(), z.unknown()),
+  requestedAt: timestamp,
+});
+export type DeviceCommand = z.infer<typeof DeviceCommandSchema>;
+
+export const CommandResultSchema = z.object({
+  id: z.uuid(),
+  status: z.enum(['DONE', 'FAILED']),
+  message: z.string().max(300),
+});
+export type CommandResult = z.infer<typeof CommandResultSchema>;
+
 // ----------------------------------------------------------------- push
 export const SyncItemSchema = z.object({
   seq: z.number().int().positive(),
@@ -54,8 +79,10 @@ export type SyncItem = z.infer<typeof SyncItemSchema>;
 
 export const SyncPushRequestSchema = z.object({
   items: z.array(SyncItemSchema).max(SYNC_PUSH_MAX_ITEMS),
+  /** Results of commands received in an earlier reply. */
+  commandResults: z.array(CommandResultSchema).max(20).default([]),
 });
-export type SyncPushRequest = z.infer<typeof SyncPushRequestSchema>;
+export type SyncPushRequest = z.input<typeof SyncPushRequestSchema>;
 
 export const SyncPushReplySchema = z.object({
   /** Highest outbox seq now stored in Supabase (null = nothing applied). */
@@ -64,6 +91,8 @@ export const SyncPushReplySchema = z.object({
   /** The first item that could not be applied; nothing after it was applied. */
   failure: z.object({ seq: z.number().int(), entity: z.string().nullable(), message: z.string() }).nullable(),
   serverTime: timestamp,
+  /** Officer commands waiting for this kiosk. */
+  commands: z.array(DeviceCommandSchema).default([]),
 });
 export type SyncPushReply = z.infer<typeof SyncPushReplySchema>;
 export const SyncPushResponseSchema = apiResponseSchema(SyncPushReplySchema);

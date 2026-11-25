@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DoorState, RentalStatus } from '@calc-rental/shared';
-import { DEV_RFID, DEV_SETTINGS, seedDevData } from '../db/dev-seed';
+import { DEV_IDS, DEV_RFID, DEV_SETTINGS, seedDevData } from '../db/dev-seed';
 import { KioskStore } from '../db/kiosk-store';
 import { openLocalDatabase } from '../db/sqlite';
 import { createMockHardware, type MockHardware } from '../hardware/mock';
@@ -387,6 +387,36 @@ describe('restart recovery', () => {
     await kiosk.handleScan(JUAN);
     await restart();
     expect(store.getRental(rentalId)!.status).toBe(RentalStatus.ACTIVE);
+  });
+});
+
+describe('officer emergency unlock (Phase 13)', () => {
+  it('unlocks the locker for 10 s while idle, logs a WARNING event, then locks and returns to ready', async () => {
+    const result = await kiosk.handleOfficerUnlock(DEV_IDS.locker2, { commandId: 'cmd-1', requestedBy: 'officer@example.test' });
+    expect(result).toEqual({ ok: true, message: 'Locker 2 unlocked for 10 s.' });
+    expect(kiosk.state).toBe(KioskState.OFFICER_UNLOCK);
+    expect([...hw.lockers.open]).toEqual([2]);
+    expect(lcd()).toEqual(['OFFICER UNLOCK', 'LOCKER 2 OPEN']);
+    expect(store.db.prepare(`SELECT severity FROM device_events WHERE event_type = 'LOCKER_UNLOCKED'`).get()).toEqual({ severity: 'WARNING' });
+
+    await kiosk.handleScan(JUAN); // students can't start anything meanwhile
+    expect(kiosk.state).toBe(KioskState.OFFICER_UNLOCK);
+
+    await advance(11 * SECOND);
+    expect(hw.lockers.open.size).toBe(0);
+    expect(kiosk.state).toBe(KioskState.SYSTEM_READY);
+  });
+
+  it('refuses while a student is using the kiosk', async () => {
+    await kiosk.handleScan(JUAN);
+    const result = await kiosk.handleOfficerUnlock(DEV_IDS.locker1, { commandId: 'cmd-2' });
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/busy/);
+    expect(hw.lockers.open.size).toBe(0);
+  });
+
+  it('refuses an unknown locker', async () => {
+    expect(await kiosk.handleOfficerUnlock('00000000-0000-4000-8000-000000000999', { commandId: 'cmd-3' })).toMatchObject({ ok: false });
   });
 });
 

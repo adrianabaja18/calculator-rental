@@ -17,6 +17,7 @@ import type { Json } from '@/lib/supabase/database.types';
  * POST  kiosk outbox → Supabase. Items are applied IN ORDER by the database
  *       function apply_kiosk_sync (one sub-transaction each). The reply says
  *       how far it got, so the kiosk marks exactly those items as synced.
+ *       It also carries officer commands (Phase 13) both ways.
  * GET   officer data → kiosk: settings, this kiosk's lockers, all calculators,
  *       and students / penalties changed since the kiosk's cursors (paged).
  */
@@ -70,8 +71,50 @@ export async function POST(request: Request) {
     })
     .eq('id', auth.device.id);
 
-  const reply: SyncPushReply = { ...result, serverTime };
+  const commands = await exchangeCommands(db, auth.device.id, parsed.data.commandResults, serverTime);
+  const reply: SyncPushReply = { ...result, serverTime, commands };
   return jsonOk(reply, NO_STORE);
+}
+
+/**
+ * Phase 13 officer commands: record the kiosk's results, expire commands
+ * nobody picked up in time, and hand out the pending ones (marked SENT).
+ */
+async function exchangeCommands(
+  db: ReturnType<typeof createSupabaseAdminClient>,
+  deviceId: string,
+  results: { id: string; status: 'DONE' | 'FAILED'; message: string }[],
+  serverTime: string,
+): Promise<SyncPushReply['commands']> {
+  for (const r of results) {
+    await db
+      .from('device_commands')
+      .update({ status: r.status, completed_at: serverTime, result_message: r.message })
+      .eq('id', r.id)
+      .eq('device_id', deviceId)
+      .in('status', ['PENDING', 'SENT']);
+  }
+  await db
+    .from('device_commands')
+    .update({ status: 'EXPIRED', completed_at: serverTime, result_message: 'The kiosk did not pick it up in time.' })
+    .eq('device_id', deviceId)
+    .in('status', ['PENDING', 'SENT'])
+    .lt('expires_at', serverTime);
+
+  const { data: pending } = await db
+    .from('device_commands')
+    .update({ status: 'SENT', sent_at: serverTime })
+    .eq('device_id', deviceId)
+    .eq('status', 'PENDING')
+    .select('id, command, payload, requested_at');
+  return (pending ?? [])
+    .filter((c) => c.command === 'UNLOCK_LOCKER' || c.command === 'REFRESH')
+    .map((c) => ({
+      id: c.id,
+      command: c.command as 'UNLOCK_LOCKER' | 'REFRESH',
+      payload: (c.payload ?? {}) as Record<string, unknown>,
+      requestedAt: c.requested_at,
+    }));
 }
 
 const cursorParam = z.iso.datetime({ offset: true }).nullable().catch(null);

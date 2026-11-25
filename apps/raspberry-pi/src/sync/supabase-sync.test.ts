@@ -179,6 +179,20 @@ describe('kiosk outbox → Supabase (apply_kiosk_sync)', () => {
     ).toEqual({ waived: 10, status: 'WAIVED' });
   });
 
+  it('Phase 13: an emergency unlock needs a reason and expires after 2 minutes', async () => {
+    const { rows } = await pg.query<{ minutes: number }>(
+      `insert into public.device_commands (device_id, command, payload, reason)
+       values ($1, 'UNLOCK_LOCKER', '{}', 'stuck') returning extract(epoch from (expires_at - requested_at))::int / 60 as minutes`,
+      [DEVICE],
+    );
+    expect(rows[0]!.minutes).toBe(2);
+    await pg.exec('savepoint no_reason');
+    await expect(pg.query(`insert into public.device_commands (device_id, command) values ($1, 'UNLOCK_LOCKER')`, [DEVICE])).rejects.toThrow(
+      /unlock_has_reason/,
+    );
+    await pg.exec('rollback to savepoint no_reason');
+  });
+
   it('stops at the first item Supabase refuses and reports it; earlier items stay applied', async () => {
     store.recordEvent({ type: 'SYSTEM_ERROR', severity: 'INFO', message: 'before', occurredAt: clock.toISOString() });
     store.enqueue('locker_state', 'nope', { id: randomUUID(), status: 'AVAILABLE' }); // not this kiosk's locker

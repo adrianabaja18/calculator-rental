@@ -1,6 +1,8 @@
 import {
   DoorState,
   ErrorCode,
+  EventSeverity,
+  EventType,
   LockState,
   RentalStatus,
   RfidState,
@@ -59,6 +61,9 @@ interface Flow {
   dueAt?: string;
 }
 
+/** How long an officer's emergency unlock keeps the solenoid open. */
+export const OFFICER_UNLOCK_MS = 10_000;
+
 interface SensorSnapshot {
   rfidState: RfidState;
   uid: string | null;
@@ -71,6 +76,7 @@ export class KioskController {
   private flow: Flow | null = null;
   /** Between the scan and the blue button press. */
   private selection: { raw: string; deadline: number } | null = null;
+  private officerUnlock: { channel: number; until: number } | null = null;
   private holdUntil = 0;
   private queue: Promise<void> = Promise.resolve();
   private readonly sensors = new Map<string, SensorSnapshot>();
@@ -150,6 +156,17 @@ export class KioskController {
 
   tick(): Promise<void> {
     return this.enqueue(() => this.onTick());
+  }
+
+  /**
+   * Officer emergency unlock from the dashboard (Phase 13). Only while no
+   * student is using the kiosk; the locker stays unlocked `OFFICER_UNLOCK_MS`.
+   */
+  handleOfficerUnlock(lockerId: string, info: { commandId: string; requestedBy?: string }): Promise<{ ok: boolean; message: string }> {
+    let outcome = { ok: false, message: 'Not run.' };
+    return this.enqueue(async () => {
+      outcome = await this.onOfficerUnlock(lockerId, info);
+    }).then(() => outcome);
   }
 
   // ------------------------------------------------------------------ scan
@@ -325,6 +342,30 @@ export class KioskController {
     }
   }
 
+  private async onOfficerUnlock(lockerId: string, info: { commandId: string; requestedBy?: string }) {
+    if (this.state !== KioskState.SYSTEM_READY) {
+      return { ok: false, message: `The kiosk is busy (${this.state}). Try again when no student is using it.` };
+    }
+    const locker = this.store.listLockerHardware().find((l) => l.id === lockerId);
+    if (!locker) return { ok: false, message: 'This kiosk has no such locker.' };
+
+    await this.hw.lockers.unlock(locker.channel, OFFICER_UNLOCK_MS);
+    this.officerUnlock = { channel: locker.channel, until: this.now().getTime() + OFFICER_UNLOCK_MS };
+    this.move(KioskState.OFFICER_UNLOCK);
+    await this.hw.buzzer.beep('attention');
+    await this.show(LCD.officerUnlock(locker.number));
+    this.store.recordEvent({
+      type: EventType.LOCKER_UNLOCKED,
+      severity: EventSeverity.WARNING,
+      message: `Officer emergency unlock of Locker ${locker.number}${info.requestedBy ? ` by ${info.requestedBy}` : ''}`,
+      lockerId,
+      payload: { commandId: info.commandId, requestedBy: info.requestedBy ?? null, seconds: OFFICER_UNLOCK_MS / 1000 },
+      occurredAt: this.now().toISOString(),
+    });
+    this.log('warn', 'Officer emergency unlock', { locker: locker.number, commandId: info.commandId });
+    return { ok: true, message: `Locker ${locker.number} unlocked for ${OFFICER_UNLOCK_MS / 1000} s.` };
+  }
+
   // ------------------------------------------------------------------ tick
   private async onTick() {
     const now = this.now().getTime();
@@ -364,6 +405,14 @@ export class KioskController {
 
       case KioskState.WAITING_FOR_RETURN:
         return this.checkReturn(now);
+
+      case KioskState.OFFICER_UNLOCK:
+        if (this.officerUnlock && now >= this.officerUnlock.until) {
+          await this.hw.lockers.lock(this.officerUnlock.channel);
+          this.officerUnlock = null;
+          await this.toReady();
+        }
+        return;
 
       case KioskState.RENTAL_ACTIVE:
       case KioskState.RETURN_COMPLETE:
@@ -547,10 +596,11 @@ export class KioskController {
   private enqueue(step: () => Promise<void> | void): Promise<void> {
     const run = this.queue.then(step).catch(async (error: unknown) => {
       this.log('error', 'Kiosk step failed', { error: error instanceof Error ? error.message : String(error), state: this.state });
-      const channel = this.flow?.channel;
+      const channel = this.flow?.channel ?? this.officerUnlock?.channel;
       this.state = KioskState.ERROR;
       this.flow = null;
       this.selection = null;
+      this.officerUnlock = null;
       this.holdUntil = this.now().getTime() + this.messageMs;
       if (channel !== undefined) await this.hw.lockers.lock(channel).catch(() => {});
       await this.hw.coins.setEnabled(false).catch(() => {});

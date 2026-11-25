@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-27, end of **Phase 12** (two-way sync)
+> **Last updated:** 2026-11-27, end of **Phase 13** (monitoring and officer tools)
 
 ---
 
@@ -48,7 +48,7 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 10 | ESP32-CAM QR firmware + serial link | ✅ Done and verified on the real board |
 | 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer, front-panel buttons (Python helper) | ✅ Built and tested in software. ⏳ Bring-up on the Pi (§6.0g). |
 | 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ✅ Built and tested in software. ⏳ Needs `db:push` + a run against the live project (§6). |
-| 13 | Error handling, audit logs, device monitoring | ⬜ |
+| 13 | Device monitoring, emergency unlock, event and audit logs, transactions, payments, penalties (waive) | ✅ Built and tested in software. ⏳ Needs `db:push` (§6). |
 | 14 | Testing, simulator, system validation | ⬜ |
 | 15 | Deployment and final documentation | ⬜ |
 
@@ -159,7 +159,47 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 12 hand-off: two-way sync (kiosk SQLite ⇄ Supabase)
+## 6. Phase 13 hand-off: monitoring and officer tools
+
+### Built
+| Page / part | What officers get |
+|---|---|
+| **Devices** | Online/offline, last heartbeat, kiosk state, CPU temperature, clock difference, software version, sync backlog, last upload/download, sync problems and set-aside items. Per locker: status, expected calculator, what the RFID reader sees, lock/door, last reading. **Emergency unlock** per locker (officers, reason required) and **Sync now**. Recent commands with their results. |
+| **Event Logs** | Every kiosk event (scans, coins, unlocks, RFID checks, sync problems), filterable by severity and type, with errors highlighted and payload details. |
+| **Audit Logs** (officers) | Who did what, when and why (blocks, maintenance, settings, waivers, unlocks), with before/after values. |
+| **Transactions** | All rentals including cancelled/failed ones, with late minutes and penalty owed. |
+| **Payments** | Coin payments for rentals and penalties, totals and overpaid coins. |
+| **Penalties** | Late fees with **Waive** (officers, reason required). The waiver reaches the kiosk on its next sync and unblocks the student. |
+
+**How emergency unlock works**
+1. The dashboard writes a `device_commands` row.
+2. The kiosk receives it in its next sync reply (≤ ~10 s).
+3. **Only if no student is using the kiosk**, it unlocks that locker for **10 s** (LCD `OFFICER UNLOCK`, WARNING event `LOCKER_UNLOCKED`), then locks again.
+4. The result (DONE/FAILED and the reason) comes back on the next sync.
+5. A command nobody picked up **expires after 2 minutes**, so a kiosk coming back online later never opens a locker by surprise.
+
+| Where | What |
+|---|---|
+| `supabase/migrations/20261127000200_monitoring.sql` | `device_commands` (RLS: admins read, server writes), `v_devices` (device + sync columns + connection status), Realtime for commands and events |
+| `apps/web/src/app/api/device/sync/route.ts` | The push request carries `commandResults` and the reply carries `commands` (expired ones are marked `EXPIRED`) |
+| `apps/raspberry-pi/src/sync/sync-service.ts` | Polls for commands every push cycle, runs them (`REFRESH` = pull now), reports results immediately, keeps them if the network drops |
+| `apps/raspberry-pi/src/kiosk/` | New state `OFFICER_UNLOCK`; `handleOfficerUnlock()` |
+| Dashboard | Pages above; `FilterBar` got an optional second filter |
+
+### Set it up
+```bash
+npm run db:push
+```
+
+### Phase 13 verification checklist
+- [ ] **Devices** shows the kiosk ONLINE with a recent heartbeat while `start:pi` runs, and OFFLINE about 90 s after you stop it.
+- [ ] **Emergency unlock** on Locker 1 (with a reason): within ~10 s the kiosk LCD shows `OFFICER UNLOCK` (mock mode prints it), it locks again after 10 s, and the command shows **Done**. The unlock also appears in **Audit Logs** and **Event Logs**.
+- [ ] Start a borrow (`juan`), then try the emergency unlock. The command shows **Failed: The kiosk is busy…**
+- [ ] Stop the kiosk and request an unlock. After 2 minutes it shows **Expired**. Starting the kiosk later does **not** unlock anything.
+- [ ] Make a late return without paying (mock: `juan`, `blue 1`, `coin 20`, `take 1`, `red 1`, `wait 240`, `juan`, then let the penalty time out). **Penalties** shows it UNPAID. **Waive** it, and within a minute `juan` can borrow again.
+- [ ] **Transactions**, **Payments** and **Event Logs** fill up as you use the mock kiosk, and their filters work.
+
+## 6.0h Phase 12 hand-off (completed in software): two-way sync (kiosk SQLite ⇄ Supabase)
 
 ### What it does
 - **Push** (every 10 s): the kiosk's outbox goes to Supabase in order. That covers rentals, returns, payments, coins, penalties, events, locker and calculator statuses, and new students. The dashboard now shows real kiosk activity.

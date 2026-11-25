@@ -44,6 +44,22 @@ const tones: Record<string, BadgeTone> = {
   // devices
   ONLINE: 'green',
   NEVER_SEEN: 'gray',
+  OK: 'green',
+  DEGRADED: 'amber',
+  FAULT: 'red',
+  // device commands
+  SENT: 'amber',
+  DONE: 'green',
+  EXPIRED: 'gray',
+  // payments & penalties
+  PARTIAL: 'amber',
+  UNPAID: 'red',
+  WAIVED: 'gray',
+  REFUNDED: 'gray',
+  // event severity
+  INFO: 'blue',
+  WARNING: 'amber',
+  CRITICAL: 'red',
 };
 
 export function toneFor(status: string | null | undefined): BadgeTone {
