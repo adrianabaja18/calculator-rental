@@ -10,8 +10,9 @@
  *   unlock <locker>   pulse that locker's relay/solenoid (LOCK_PULSE_MS)
  *   rfid              read every reader (and door switch, if DOOR_PINS is set) once
  *   watch             keep reading; prints whenever a tag appears/leaves or a door opens/closes (Enter stops)
+ *   lock <locker>     switch that relay off now
  *   quit
- * Coins are printed automatically as they are inserted.
+ * Coins and front-panel button presses are printed automatically.
  */
 import readline from 'node:readline';
 import { bridgeArgs, config } from '../src/config';
@@ -29,6 +30,9 @@ const bridge = new BridgeClient({
 bridge.onCoin((pulses) =>
   console.log(`\n  COIN: ${pulses} pulse(s) = P${pulses}${[1, 5, 10, 20].includes(pulses) ? '' : '  ← not a programmed value: check the coin selector setting'}`),
 );
+bridge.onButton((kind, channel) =>
+  console.log(`\n  BUTTON: ${kind === 'select' ? 'BLUE (choose locker)' : 'RED (door closed)'} for locker ${channel}`),
+);
 bridge.start();
 
 const ready = await Promise.race([bridge.ready, new Promise<null>((r) => setTimeout(() => r(null), 15_000))]);
@@ -38,7 +42,8 @@ if (!ready) {
 }
 console.log(`\nHardware bridge ${ready.version} (${ready.mode}) — devices found:`, ready.devices);
 console.log(`Pins: relays ${config.RELAY_PINS} (${config.RELAY_ACTIVE_LOW ? 'active-LOW' : 'active-HIGH'}), coin ${config.COIN_PIN}, buzzer ${config.BUZZER_PIN}, RFID SPI ${config.RFID_SPI}, LCD ${config.LCD_I2C_ADDRESS}, doors ${config.DOOR_PINS || 'none'}`);
-console.log('Commands: lcd [text] | beep [ok|error|attention] | unlock <1..n> | rfid | watch | quit\n');
+console.log(`Buttons: blue ${config.SELECT_BUTTON_PINS || 'none'}, red ${config.CLOSE_BUTTON_PINS || 'none'} (press them any time)`);
+console.log('Commands: lcd [text] | beep [ok|error|attention] | unlock <1..n> | lock <1..n> | rfid | watch | quit\n');
 
 let watching: NodeJS.Timeout | null = null;
 const last = new Map<number, string | null>();
@@ -87,6 +92,12 @@ rl.on('line', async (line) => {
         await bridge.request('unlock', { channel: ch, ms: config.LOCK_PULSE_MS });
         return console.log(`  relay ${ch} ON for ${config.LOCK_PULSE_MS} ms (you should hear the relay click twice and the solenoid pull in)`);
       }
+      case 'lock': {
+        const ch = Number(rest[0]);
+        if (!(ch >= 1 && ch <= relays)) return console.log(`  usage: lock <1..${relays}>`);
+        await bridge.request('lock', { channel: ch });
+        return console.log(`  relay ${ch} OFF`);
+      }
       case 'rfid':
         return await readAll(false);
       case 'watch':
@@ -103,7 +114,7 @@ rl.on('line', async (line) => {
       case '':
         return;
       default:
-        return console.log('  commands: lcd [text] | beep [ok|error|attention] | unlock <n> | rfid | watch | quit');
+        return console.log('  commands: lcd [text] | beep [ok|error|attention] | unlock <n> | lock <n> | rfid | watch | quit');
     }
   } catch (error) {
     console.log(`  ✘ ${(error as Error).message}`);

@@ -4,6 +4,8 @@ import type { CoinInput } from '../payment/payment-service';
 import type { LcdScreen } from '../kiosk/lcd';
 import type {
   BeepPattern,
+  ButtonKind,
+  ButtonPanel,
   BuzzerController,
   ClockSource,
   CoinAcceptor,
@@ -64,10 +66,16 @@ export class MockRFIDReader implements RFIDReader {
 }
 
 export class MockLockerController implements LockerController {
-  readonly unlocks: Array<{ channel: number; pulseMs: number }> = [];
+  readonly unlocks: Array<{ channel: number; maxMs: number }> = [];
+  /** Channels whose solenoid is energised right now. */
+  readonly open = new Set<number>();
   private readonly doors = new Map<number, DoorState>();
-  async unlock(channel: number, pulseMs: number) {
-    this.unlocks.push({ channel, pulseMs });
+  async unlock(channel: number, maxMs: number) {
+    this.unlocks.push({ channel, maxMs });
+    this.open.add(channel);
+  }
+  async lock(channel: number) {
+    this.open.delete(channel);
   }
   async doorState(channel: number) {
     return this.doors.get(channel) ?? DoorState.UNKNOWN; // UNKNOWN = no reed switch fitted
@@ -75,6 +83,17 @@ export class MockLockerController implements LockerController {
   /** Simulate: a reed switch reports the door. */
   setDoor(channel: number, state: DoorState) {
     this.doors.set(channel, state);
+  }
+}
+
+export class MockButtons implements ButtonPanel {
+  private handler: ((kind: ButtonKind, channel: number) => void) | null = null;
+  onPress(handler: (kind: ButtonKind, channel: number) => void) {
+    this.handler = handler;
+  }
+  /** Simulate: the student presses a front-panel button. */
+  press(kind: ButtonKind, channel: number) {
+    this.handler?.(kind, channel);
   }
 }
 
@@ -109,6 +128,7 @@ export interface MockHardware extends Hardware {
   coins: MockCoinAcceptor;
   rfid: MockRFIDReader;
   lockers: MockLockerController;
+  buttons: MockButtons;
   display: MockDisplay;
   buzzer: MockBuzzer;
   clock: MockClock;
@@ -120,6 +140,7 @@ export function createMockHardware(onShow?: (screen: LcdScreen) => void): MockHa
     coins: new MockCoinAcceptor(),
     rfid: new MockRFIDReader(),
     lockers: new MockLockerController(),
+    buttons: new MockButtons(),
     display: new MockDisplay(onShow),
     buzzer: new MockBuzzer(),
     clock: new MockClock(),

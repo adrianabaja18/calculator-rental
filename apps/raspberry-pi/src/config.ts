@@ -42,9 +42,30 @@ const ConfigSchema = z.object({
   I2C_BUS: z.coerce.number().int().min(0).max(10).default(1),
   LCD_I2C_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{2}$/).default('0x27'),
   DOOR_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default(''),
+  SELECT_BUTTON_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('24,25'),
+  CLOSE_BUTTON_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('22,23'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   LOG_PRETTY: booleanString,
   HTTP_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(8000),
+}).superRefine((c, ctx) => {
+  // Two devices on one GPIO pin would fail inside the bridge; say so clearly instead.
+  const pins = (s: string) => s.split(',').filter(Boolean).map(Number);
+  const used = new Map<number, string>();
+  const claims: Array<[string, number[]]> = [
+    ['RELAY_PINS', pins(c.RELAY_PINS)],
+    ['COIN_PIN', [c.COIN_PIN]],
+    ['BUZZER_PIN', [c.BUZZER_PIN]],
+    ['DOOR_PINS', pins(c.DOOR_PINS)],
+    ['SELECT_BUTTON_PINS', pins(c.SELECT_BUTTON_PINS)],
+    ['CLOSE_BUTTON_PINS', pins(c.CLOSE_BUTTON_PINS)],
+  ];
+  for (const [name, list] of claims) {
+    for (const pin of list) {
+      const other = used.get(pin);
+      if (other) ctx.addIssue({ code: 'custom', path: [name], message: `GPIO ${pin} is already used by ${other}` });
+      used.set(pin, name);
+    }
+  }
 });
 
 export type PiConfig = z.infer<typeof ConfigSchema>;
@@ -81,5 +102,7 @@ export function bridgeArgs(c: PiConfig, options: { mock?: boolean } = {}): strin
     '--i2c-bus', String(c.I2C_BUS),
     '--lcd-address', c.LCD_I2C_ADDRESS,
     ...(c.DOOR_PINS ? ['--door-pins', c.DOOR_PINS] : []),
+    ...(c.SELECT_BUTTON_PINS ? ['--select-pins', c.SELECT_BUTTON_PINS] : []),
+    ...(c.CLOSE_BUTTON_PINS ? ['--close-pins', c.CLOSE_BUTTON_PINS] : []),
   ];
 }

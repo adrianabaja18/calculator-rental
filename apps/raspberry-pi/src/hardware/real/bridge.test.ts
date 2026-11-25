@@ -12,7 +12,7 @@ import { RentalService } from '../../rental/rental-service';
 import { ReturnService } from '../../rental/return-service';
 import { createMockHardware } from '../mock';
 import { BridgeClient } from './bridge-client';
-import { BridgeBuzzer, BridgeCoinAcceptor, BridgeDisplay, BridgeLockerController, BridgeRFIDReader } from './bridge-hardware';
+import { BridgeButtons, BridgeBuzzer, BridgeCoinAcceptor, BridgeDisplay, BridgeLockerController, BridgeRFIDReader } from './bridge-hardware';
 
 /**
  * Runs the REAL Python bridge (hw-bridge/hw_bridge.py --mock) and talks to it
@@ -42,14 +42,15 @@ async function startBridge() {
 describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
   it('starts and reports its devices', async () => {
     const { ready } = await startBridge();
-    expect(ready).toMatchObject({ type: 'ready', mode: 'mock', version: '1.0.0' });
+    expect(ready).toMatchObject({ type: 'ready', mode: 'mock', version: '1.1.0' });
   });
 
-  it('pulses a relay and refuses unsafe pulse lengths', async () => {
+  it('holds a relay, locks it early, and refuses unsafe hold times', async () => {
     const { bridge } = await startBridge();
     const lockers = new BridgeLockerController(bridge);
-    await expect(lockers.unlock(1, 3000)).resolves.toBeUndefined();
-    await expect(lockers.unlock(1, 60_000)).rejects.toThrow(/100..10000/);
+    await expect(lockers.unlock(1, 60_000)).resolves.toBeUndefined();
+    await expect(lockers.lock(1)).resolves.toBeUndefined();
+    await expect(lockers.unlock(1, 600_000)).rejects.toThrow(/100..300000/);
     expect(await lockers.doorState(1)).toBe(DoorState.UNKNOWN); // no reed switches fitted
   });
 
@@ -72,6 +73,16 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
     await wait(300);
     expect(coins.map((c) => c.pulseCount)).toEqual([5, 1]);
     expect(new Set(coins.map((c) => c.eventId)).size).toBe(2); // each coin gets its own id
+  });
+
+  it('reports front-panel button presses', async () => {
+    const { bridge } = await startBridge();
+    const presses: string[] = [];
+    new BridgeButtons(bridge).onPress((kind, channel) => presses.push(`${kind}${channel}`));
+    await bridge.request('mock_button', { kind: 'select', channel: 2 });
+    await bridge.request('mock_button', { kind: 'close', channel: 1 });
+    await wait(50);
+    expect(presses).toEqual(['select2', 'close1']);
   });
 
   it('updates the LCD and beeps', async () => {
@@ -108,6 +119,7 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
         coins: new BridgeCoinAcceptor(bridge),
         rfid: new BridgeRFIDReader(bridge),
         lockers: new BridgeLockerController(bridge),
+        buttons: new BridgeButtons(bridge),
         display: new BridgeDisplay(bridge),
         buzzer: new BridgeBuzzer(bridge),
       },
@@ -116,6 +128,9 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
     );
     await kiosk.start();
     await kiosk.handleScan('JUAN DELA CRUZ\t2022100001\tBSCpE');
+    expect(kiosk.state).toBe(KioskState.SELECTING_LOCKER);
+    await bridge.request('mock_button', { kind: 'select', channel: 1 }); // blue button, locker 1
+    await wait(100);
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_PAYMENT);
 
     // Real start() wiring: coin events from the bridge reach the kiosk on their own.
@@ -125,6 +140,9 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
 
     await bridge.request('mock_tag', { channel: 1, uid: null }); // student takes CALC-001
     await kiosk.tick();
+    expect(kiosk.state).toBe(KioskState.WAITING_FOR_DOOR_CLOSE);
+    await bridge.request('mock_button', { kind: 'close', channel: 1 }); // red button
+    await wait(100);
     expect(kiosk.state).toBe(KioskState.RENTAL_ACTIVE);
     expect(store.db.prepare(`SELECT status FROM rentals`).get()).toEqual({ status: 'ACTIVE' });
   });

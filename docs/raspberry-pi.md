@@ -21,12 +21,14 @@ The software side is `apps/raspberry-pi` (Node.js kiosk) and `apps/raspberry-pi/
 | ESP32-CAM + OV2640 on USB-C base | 1 | Pi USB port (`/dev/ttyUSB0`) |
 | 12 V adapter (≥ 3 A) | 1 | solenoids + coin selector |
 | 5.1 V / 3 A USB-C supply | 1 | Raspberry Pi |
-| Door switch per locker (push button or microswitch, pressed by the closed door) | 2 | GPIO 22, GPIO 23 |
+| Arcade push button (Yenox microswitch), **blue**, one per locker: "choose this locker" | 2 | GPIO 24, GPIO 25 |
+| Arcade push button (Yenox microswitch), **red**, one per locker: "I closed the door" | 2 | GPIO 22, GPIO 23 |
 
 **Not fitted (decided 2026-11-19):**
 - **No 3rd relay** for the coin selector. It's always powered, so a coin inserted while idle is logged for an officer refund.
+- **No door sensors.** The red button tells the kiosk the door is shut (decided 2026-11-25). Reed switches can still be added with `DOOR_PINS`.
 
-**Door switches (added 2026-11-25):** each locker has a button on its frame that the closed door presses. A rental finishes only after the student shuts the door, and a return completes only with the right calculator inside **and** the door shut. Without switches, set `DOOR_PINS=` (empty) and the RFID check alone decides.
+**Front panel (decided 2026-11-25):** `[BLUE 1] [RED 1]  [ LCD ]  [BLUE 2] [RED 2]`. The left pair belongs to Locker 1 and the right pair to Locker 2. The student picks a locker with its **blue** button. A locker stays **unlocked** until the student presses its **red** button (or the timeout ends), and then it locks.
 
 ## 2. Pin map (BCM numbering)
 
@@ -43,8 +45,10 @@ The software side is `apps/raspberry-pi` (Node.js kiosk) and `apps/raspberry-pi/
 | RC522 MISO (both) | GPIO 9 | 21 | |
 | RC522 #1 SDA/SS → Locker 1 | GPIO 8 (CE0) | 24 | `RFID_SPI=0.0,0.1` |
 | RC522 #2 SDA/SS → Locker 2 | GPIO 7 (CE1) | 26 | |
-| Door switch → Locker 1 | GPIO 22 | 15 | `DOOR_PINS=22,23` |
-| Door switch → Locker 2 | GPIO 23 | 16 | |
+| RED button → Locker 1 | GPIO 22 | 15 | `CLOSE_BUTTON_PINS=22,23` |
+| RED button → Locker 2 | GPIO 23 | 16 | |
+| BLUE button → Locker 1 | GPIO 24 | 18 | `SELECT_BUTTON_PINS=24,25` |
+| BLUE button → Locker 2 | GPIO 25 | 22 | |
 | 3.3 V (RC522s, PC817 output side) | — | 1, 17 | |
 | 5 V (relay module, LCD) | — | 2, 4 | |
 | GND (everything, common) | — | 6, 9, 14, 20, 25, 30, 34, 39 | |
@@ -61,7 +65,9 @@ Pi pin 29 (GPIO5) ─ IN1         Relay COM2 ── +12 V
 Pi pin 31 (GPIO6) ─ IN2         Relay NO2  ── Solenoid 2 (+)   Solenoid 2 (−) ── 12 V GND
 Flyback diode (1N4007/1N5408) across EACH solenoid: stripe (cathode) to the + side.
 ```
-- **NO** (normally open) means the lock is energised only while the relay is ON. The kiosk pulses it for `LOCK_PULSE_MS` (3 s) and never holds it, because the solenoids would overheat.
+- **NO** (normally open) means the lock is energised (unlocked) only while the relay is ON.
+- The kiosk keeps the relay ON from payment until the student presses the **red** button. The longest it can stay ON is the **removal timeout** when borrowing or the **return timeout** when returning (dashboard **Settings**, default 60 s and 90 s). The Python bridge turns the relay off at that limit by itself, even if the kiosk program crashes.
+- ⚠️ **Heat check:** many cheap 12 V solenoid locks are rated for only about 10 s ON at a time. During bring-up, hold a lock open for 60 s with `unlock 1` (set `LOCK_PULSE_MS=60000` temporarily), then touch it. If it's too hot to hold, **lower both timeouts in Settings** (minimum 15 s).
 - **3.3 V trigger check:**
   1. Power up and run `npm run hwcheck:pi`.
   2. At rest, both relay LEDs must be **off**.
@@ -119,24 +125,29 @@ LCD SDA ── GPIO 2 (pin 3)     LCD SCL ── GPIO 3 (pin 5)
 - Plug its USB-C base into a Pi USB port. It shows up as `/dev/ttyUSB0`.
 - A path that never changes is `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` (check with `ls /dev/serial/by-id/`). Put it in `SCANNER_PORT`.
 
-### 3.7 Door switches (×2)
+### 3.7 Front-panel buttons (×4)
+Each button's microswitch has three tabs: **COM ①**, **NC ②** (top) and **NO ③** (bottom).
 ```
-Locker 1 switch: one leg ── GPIO 22 (pin 15)    other leg ── Pi GND
-Locker 2 switch: one leg ── GPIO 23 (pin 16)    other leg ── Pi GND
+RED 1  (Locker 1):  COM ── Pi GND    NO ③ ── GPIO 22 (pin 15)    NC ② ── not connected
+RED 2  (Locker 2):  COM ── Pi GND    NO ③ ── GPIO 23 (pin 16)    NC ② ── not connected
+BLUE 1 (Locker 1):  COM ── Pi GND    NO ③ ── GPIO 24 (pin 18)    NC ② ── not connected
+BLUE 2 (Locker 2):  COM ── Pi GND    NO ③ ── GPIO 25 (pin 22)    NC ② ── not connected
 ```
-- No resistor: the Pi's internal pull-up is used. **Pressed = door CLOSED**, released = OPEN.
-- 3-terminal microswitch (COM/NO/NC): use **COM + NO**.
-- Mount it so the door presses it fully **only when the latch has caught**. If the button is pressed before the door is fully shut, the kiosk is told the door is closed too early.
-- Wire it to the **Pi's** GND, never the 12 V side.
+- No resistors: the Pi's internal pull-ups are used. All four COM wires can share one GND pin (pin 14 or 20 is closest).
+- **Pi GND only**, never the 12 V side.
+- Check: in `hwcheck:pi`, each press prints `BUTTON: BLUE (choose locker) for locker 1`, and so on. A button that prints nothing, or prints when you *release* it, is on the NC tab.
 
-**What the kiosk does with it**
-| Step | Door switch | Kiosk |
+**What the kiosk does with them**
+| Step | LCD | Button |
 |---|---|---|
-| Borrow: calculator taken | still OPEN | LCD `PLEASE CLOSE / THE LOCKER DOOR` + beep; waits (removal timeout) |
-| Borrow: door shut | CLOSED | `RENTAL SUCCESS / DUE AT …` |
-| Borrow: never shut | OPEN at timeout | `DOOR LEFT OPEN / SEE AN OFFICER` (rental stays active, warning logged) |
-| Return: right calculator in | OPEN | `PLEASE CLOSE / THE LOCKER DOOR`; completes when CLOSED |
-| Return: right calculator in, never shut | OPEN at timeout | return **completes** (no extra penalty), `DOOR LEFT OPEN`, warning logged |
+| Idle | `SCAN STUDENT ID` / `1:READY 2:N/A` | — |
+| After a valid scan (borrow) | `PUSH BLUE BUTTON` / `1:READY 2:N/A` | **Blue** of a READY locker (30 s). A locker that isn't READY shows `LOCKER 2 N/A`; pick the other one. |
+| Locker unlocked, calculator inside | `LOCKER 1 OPEN` / `TAKE CALCULATOR` | Red is ignored until the calculator is out |
+| Calculator taken | `CLOSE THE DOOR` / `PUSH RED BUTTON` | **Red** of that locker → locks → `RENTAL SUCCESS` |
+| Return: locker unlocked | `RETURN CALC #1` / `TO LOCKER 1` | — |
+| Right calculator placed | `CLOSE THE DOOR` / `PUSH RED BUTTON` | **Red** → RFID checked → locks → `RETURN SUCCESS` |
+| Wrong or no calculator when red is pressed | `WRONG CALCULATOR` or `CALCULATOR NOT DETECTED` | The locker **stays unlocked**; fix it and press red again |
+| Red never pressed | `DOOR LEFT OPEN` / `SEE AN OFFICER` | Locks at the timeout. A borrow stays active; a return with the right calculator inside still completes. A warning is logged. |
 
 ## 4. Power
 ```
@@ -185,7 +196,7 @@ The tool prints which devices it found, then accepts commands. Work through it i
 | 3. Relays | `unlock 1`, `unlock 2` | that relay clicks ON, then OFF after 3 s, and the solenoid pulls |
 | 4. RFID | `watch`, then place/remove each calculator over its reader | `RFID reader 1: tag 04-…` / `no tag` |
 | 5. Coins | insert ₱1, ₱5, ₱10, ₱20 | `COIN: 5 pulse(s) = P5`, … |
-| 6. Door switches | `watch`, then open/close each door | `Door switch 1: CLOSED (pressed)` / `OPEN (released)` |
+| 6. Buttons | press each of the 4 buttons | `BUTTON: BLUE (choose locker) for locker 1`, `BUTTON: RED (door closed) for locker 2`, … |
 
 **Write down the two tag UIDs from step 4.** They go into the dashboard (**Calculators → Edit → RFID tag UID**) and into the kiosk's local database (Phase 12 sync will do this automatically; until then pass them to the seed, using your own UIDs):
 

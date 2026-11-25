@@ -73,15 +73,21 @@ export function findInventoryMismatches(lockers: LockerSnapshot[]): InventoryMis
 }
 
 /**
- * Picks the locker for a new rental: the lowest-numbered assignable locker.
- * (Deterministic, easy to explain and to test with two lockers.)
+ * Picks the locker for a new rental: the one the student chose (blue button),
+ * or else the lowest-numbered assignable locker.
  */
 export function selectLockerForRental(
   lockers: LockerSnapshot[],
+  lockerNumber?: number,
 ): RuleResult<{ locker: LockerSnapshot; calculator: NonNullable<LockerSnapshot['calculator']> }> {
-  const candidate = [...lockers].sort((a, b) => a.lockerNumber - b.lockerNumber).find(isLockerAssignable);
+  const candidate = [...lockers]
+    .sort((a, b) => a.lockerNumber - b.lockerNumber)
+    .find((l) => (lockerNumber === undefined || l.lockerNumber === lockerNumber) && isLockerAssignable(l));
   if (!candidate || !candidate.calculator) {
-    return refuse(ErrorCode.NO_CALCULATOR_AVAILABLE, 'No calculator is available right now.');
+    return refuse(
+      ErrorCode.NO_CALCULATOR_AVAILABLE,
+      lockerNumber === undefined ? 'No calculator is available right now.' : `Locker ${lockerNumber} is not available.`,
+    );
   }
   return { ok: true, locker: candidate, calculator: candidate.calculator };
 }

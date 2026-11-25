@@ -7,6 +7,7 @@ import { getLocalConfig, getSchemaVersion, openLocalDatabase, setLocalConfig } f
 import { createMockHardware } from './hardware/mock';
 import { BridgeClient } from './hardware/real/bridge-client';
 import {
+  BridgeButtons,
   BridgeBuzzer,
   BridgeCoinAcceptor,
   BridgeDisplay,
@@ -88,6 +89,7 @@ async function main(): Promise<void> {
       coins: new BridgeCoinAcceptor(bridge),
       rfid: new BridgeRFIDReader(bridge),
       lockers: new BridgeLockerController(bridge),
+      buttons: new BridgeButtons(bridge),
       display: new BridgeDisplay(bridge, config.LOG_PRETTY ? printLcd : undefined),
       buzzer: new BridgeBuzzer(bridge),
       clock: new SystemClock(),
@@ -104,7 +106,6 @@ async function main(): Promise<void> {
   const returns = new ReturnService(store, payments, { now });
   const kiosk = new KioskController(store, hardware, { rentals, payments, returns }, {
     now,
-    lockPulseMs: config.LOCK_PULSE_MS,
     log: (level, message, data) => logger[level]({ event: 'KIOSK', ...data }, message),
   });
   await kiosk.start();

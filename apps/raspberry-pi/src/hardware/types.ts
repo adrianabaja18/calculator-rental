@@ -37,10 +37,21 @@ export interface RFIDReader {
 
 /** 12 V solenoid locks through relays, optional reed switches (Phase 11). */
 export interface LockerController {
-  /** Energise the solenoid for `pulseMs` (never held: the latch re-locks when the door closes). */
-  unlock(channel: number, pulseMs: number): Promise<void>;
+  /**
+   * Energise the solenoid (unlocked) until lock() is called, or at most `maxMs`.
+   * The limit is enforced by the bridge itself, so a crash can never leave a locker open.
+   */
+  unlock(channel: number, maxMs: number): Promise<void>;
+  /** De-energise now: the locker locks (student pressed the red button). */
+  lock(channel: number): Promise<void>;
   /** UNKNOWN when no door sensor is installed. */
   doorState(channel: number): Promise<DoorState>;
+}
+
+/** Front panel, one pair per locker: blue = choose this locker, red = "I closed the door". */
+export type ButtonKind = 'select' | 'close';
+export interface ButtonPanel {
+  onPress(handler: (kind: ButtonKind, channel: number) => void): void;
 }
 
 /** 16×2 I2C LCD (Phase 11). */
@@ -64,6 +75,7 @@ export interface Hardware {
   coins: CoinAcceptor;
   rfid: RFIDReader;
   lockers: LockerController;
+  buttons: ButtonPanel;
   display: DisplayController;
   buzzer: BuzzerController;
   clock: ClockSource;

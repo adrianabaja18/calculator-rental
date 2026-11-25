@@ -14,7 +14,10 @@ export const BRIDGE_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta
 type BridgeEvent =
   | { type: 'ready'; mode: 'real' | 'mock'; version: string; devices: Record<string, unknown> }
   | { type: 'coin'; pulses: number }
+  | { type: 'button'; kind: ButtonKind; channel: number }
   | { type: 'log'; level: 'warn' | 'info' | 'error'; message: string };
+
+export type ButtonKind = 'select' | 'close';
 
 type Reply = { type: string; id?: number | null; message?: string; [key: string]: unknown };
 
@@ -31,6 +34,7 @@ export class BridgeClient {
   private nextId = 1;
   private readonly pending = new Map<number, { resolve: (r: Reply) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private readonly coinHandlers: Array<(pulses: number) => void> = [];
+  private readonly buttonHandlers: Array<(kind: ButtonKind, channel: number) => void> = [];
   private stopped = false;
   private readyResolve: ((event: Extract<BridgeEvent, { type: 'ready' }>) => void) | null = null;
   ready: Promise<Extract<BridgeEvent, { type: 'ready' }>>;
@@ -41,6 +45,10 @@ export class BridgeClient {
 
   onCoin(handler: (pulses: number) => void) {
     this.coinHandlers.push(handler);
+  }
+
+  onButton(handler: (kind: ButtonKind, channel: number) => void) {
+    this.buttonHandlers.push(handler);
   }
 
   start() {
@@ -104,6 +112,8 @@ export class BridgeClient {
     }
     const event = msg as unknown as BridgeEvent;
     if (event.type === 'coin' && Number.isInteger(event.pulses)) for (const h of this.coinHandlers) h(event.pulses);
+    else if (event.type === 'button' && (event.kind === 'select' || event.kind === 'close') && Number.isInteger(event.channel))
+      for (const h of this.buttonHandlers) h(event.kind, event.channel);
     else if (event.type === 'ready') this.readyResolve?.(event);
     else if (event.type === 'log') this.options.log?.(event.level === 'error' ? 'error' : 'warn', `hw-bridge: ${event.message}`);
   }
