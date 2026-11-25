@@ -77,6 +77,8 @@ export const LCD = {
   returnTimeout: () => screen('RETURN CANCELLED', 'NOT RETURNED'),
   closeAndPressRed: () => screen('CLOSE THE DOOR', 'PUSH RED BUTTON'),
   officerUnlock: (lockerNumber: number) => screen('OFFICER UNLOCK', `LOCKER ${lockerNumber} OPEN`),
+  /** Power saving (backlight off, so dim but readable up close). */
+  sleeping: (closed: boolean) => screen('PRESS ANY BUTTON', closed ? 'TO RETURN' : 'TO START'),
   closeDoor: () => screen('PLEASE CLOSE', 'THE LOCKER DOOR'),
   doorLeftOpen: () => screen('DOOR LEFT OPEN', 'SEE AN OFFICER'),
   systemError: () => screen('SYSTEM ERROR', 'SEE AN OFFICER'),

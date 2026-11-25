@@ -43,7 +43,7 @@ async function startBridge() {
 describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
   it('starts and reports its devices', async () => {
     const { ready } = await startBridge();
-    expect(ready).toMatchObject({ type: 'ready', mode: 'mock', version: '1.2.0' });
+    expect(ready).toMatchObject({ type: 'ready', mode: 'mock', version: '1.3.0' });
   });
 
   it('holds a relay, locks it early, and refuses unsafe hold times', async () => {
@@ -84,6 +84,14 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
     await bridge.request('mock_button', { kind: 'close', channel: 1 });
     await wait(50);
     expect(presses).toEqual(['select2', 'close1']);
+  });
+
+  it('power saving: LCD backlight and RFID readers can be switched off and on', async () => {
+    const { bridge } = await startBridge();
+    await expect(new BridgeDisplay(bridge).setBacklight(false)).resolves.toBeUndefined();
+    await expect(bridge.request('backlight', { on: true })).resolves.toMatchObject({ type: 'ok' });
+    await expect(bridge.request('rfid_power', { on: false })).resolves.toMatchObject({ type: 'ok' });
+    await expect(new BridgeRFIDReader(bridge).setPower(true)).resolves.toBeUndefined();
   });
 
   it('updates the LCD and beeps', async () => {

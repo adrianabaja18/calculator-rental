@@ -44,6 +44,8 @@ The simulator uses its own database (`apps/raspberry-pi/data/simulator.db`), nev
 5. **Blocked student:** Ana → `ACCOUNT BLOCKED`.
 6. **Empty locker:** borrow from Locker 1, then have another student press BLUE 1 → `LOCKER 1 N/A`.
 7. **Idle coin:** insert a coin with nobody paying. It's logged for refund.
+8. **Power saving:** leave it alone for 2 min. The LCD dims (`PRESS ANY BUTTON`), then any button wakes it. Start with `SIM_SLEEP_SECONDS=20` to wait less.
+9. **After hours:** click **+4 hours** until past 5 PM: `RETURNS ONLY`. Borrowing is refused and returns work.
 
 ## 3. Hardware acceptance checklist (real kiosk)
 Run these in order on the assembled kiosk. Each step says what must happen. If one fails, stop and fix it before continuing (see [raspberry-pi.md](raspberry-pi.md) troubleshooting).
@@ -71,7 +73,17 @@ Run these in order on the assembled kiosk. Each step says what must happen. If o
 - [ ] Coin with nobody paying → attention beep, logged.
 - [ ] **Power cut mid-rental:** pay, then unplug the Pi before taking the calculator. After reboot it shows ready, the rental is FAILED and the payment is on the dashboard for a refund. No locker opens by itself.
 
-### 3.3 With the dashboard (sync)
+### 3.3 Operating hours and power saving
+- [ ] **ESP32-CAM firmware 1.1.0** is flashed. The startup `hello` shows `"fw":"1.1.0"`. Sleep/wake by hand works (firmware README §6).
+- [ ] `hwcheck:pi`: `backlight off` / `backlight on` switch the LCD backlight. `rfidpower off` → `rfid` says NOT RESPONDING; `rfidpower on` → `rfid` reads tags again.
+- [ ] Leave the kiosk idle for 2 min. The LCD dims to `PRESS ANY BUTTON / TO START` and the ESP32-CAM gets noticeably cooler.
+- [ ] Press any button. The kiosk wakes (beep, `SCAN STUDENT ID`) and **a QR scan works within ~2 s**. Repeat 5 times.
+- [ ] Insert a coin while asleep. It wakes and the coin is logged for refund.
+- [ ] After 5:00 PM (or set *Closes* earlier in Settings): `RETURNS ONLY`, borrowing gives `KIOSK CLOSED`, a return still works, and it sleeps after 30 s.
+- [ ] A rental after 2:00 PM shows `DUE <weekday> …` the next open day.
+- [ ] **Devices** shows *Power: Asleep* while sleeping and the CPU temperature stays under 75 °C in normal use.
+
+### 3.4 With the dashboard (sync)
 - [ ] Rentals and returns appear on **Active Rentals / Transactions** within ~10 s.
 - [ ] **Devices** shows ONLINE, CPU temperature, both lockers' RFID and lock state.
 - [ ] Unplug the network cable, do a borrow, then plug it back in. It appears once, with nothing lost.

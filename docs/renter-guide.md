@@ -35,6 +35,7 @@ Source text for the kiosk brochure/pamphlet. It matches what the kiosk actually 
 ---
 
 ## Borrowing a calculator
+0. **Screen dark or showing `PRESS ANY BUTTON`?** The kiosk is saving power. Press **any button** to wake it, and wait a second.
 1. **Check the screen.** It shows `SCAN STUDENT ID` and the status of each locker, for example `1:READY 2:N/A`.
    - **READY** = a calculator is available in that locker.
    - **N/A** = not available.
@@ -46,7 +47,7 @@ Source text for the kiosk brochure/pamphlet. It matches what the kiosk actually 
 7. **Done!** The screen shows `RENTAL SUCCESS` and your due time, for example `DUE AT 01:00 PM`, or `DUE WED 10:00 AM` if it falls on another day. Note it down.
 
 ## Returning a calculator
-1. **Scan your school ID** at the kiosk.
+1. **Scan your school ID** at the kiosk. If the screen is dark, press any button first.
 2. **If you are late,** the screen shows how late you are and the fee, for example `LATE 1H00M` / `PAY PENALTY P10`. Insert the coins. The locker opens only after the fee is paid.
 3. **Open the locker.** The screen shows `RETURN CALC #1` / `TO LOCKER 1`, so you know which locker to use.
 4. **Put the calculator back** in the same locker it came from.
@@ -58,6 +59,7 @@ Source text for the kiosk brochure/pamphlet. It matches what the kiosk actually 
 ## What the screen means
 | Screen | What to do |
 |---|---|
+| `PRESS ANY BUTTON` (dim screen) | The kiosk is sleeping to save power. Press any button to wake it. |
 | `SCAN STUDENT ID` | Scan your ID to borrow or return. |
 | `RETURNS ONLY` / `OPEN MON 9:00AM` | The kiosk is closed. You can still return; borrowing opens at the time shown. |
 | `KIOSK CLOSED` | You tried to borrow outside opening hours. |

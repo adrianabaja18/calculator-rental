@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { APP_VERSION, HEARTBEAT_INTERVAL_SECONDS, MAX_CLOCK_DRIFT_SECONDS } from '@calc-rental/shared';
+import { APP_VERSION, EventSeverity, EventType, HEARTBEAT_INTERVAL_SECONDS, MAX_CLOCK_DRIFT_SECONDS } from '@calc-rental/shared';
 import { BackendClient } from './backend/client';
 import { bridgeArgs, config } from './config';
 import { KioskStore } from './db/kiosk-store';
@@ -108,6 +108,9 @@ async function main(): Promise<void> {
   const returns = new ReturnService(store, payments, { now });
   const kiosk = new KioskController(store, hardware, { rentals, payments, returns }, {
     now,
+    // Power saving: idle → LCD backlight, ESP32-CAM camera and RFID readers off; any button wakes it.
+    sleepAfterMs: config.POWER_SAVE ? config.SLEEP_AFTER_SECONDS * 1000 : 0,
+    closedSleepAfterMs: config.CLOSED_SLEEP_AFTER_SECONDS * 1000,
     log: (level, message, data) => logger[level]({ event: 'KIOSK', ...data }, message),
   });
   await kiosk.start();
@@ -139,13 +142,28 @@ async function main(): Promise<void> {
   sync.start();
 
   let backendOnline: boolean | null = null;
+  let lastHeatWarning = 0;
   const heartbeat = async () => {
+    const cpuTempC = readCpuTemperature();
+    // Overheating watch: one event per 30 min while hot (the Pi throttles itself at 80 °C).
+    if (cpuTempC !== null && cpuTempC >= 75 && Date.now() - lastHeatWarning > 30 * 60_000) {
+      lastHeatWarning = Date.now();
+      const critical = cpuTempC >= 80;
+      store.recordEvent({
+        type: EventType.SYSTEM_ERROR,
+        severity: critical ? EventSeverity.CRITICAL : EventSeverity.WARNING,
+        message: `Raspberry Pi CPU is ${cpuTempC.toFixed(1)} °C${critical ? ' (throttling): check ventilation now' : ': check ventilation'}`,
+        payload: { cpuTempC },
+        occurredAt: now().toISOString(),
+      });
+      logger.warn({ event: 'SYSTEM_ERROR', cpuTempC }, 'Raspberry Pi is running hot');
+    }
     const result = await backend.heartbeat({
       softwareVersion: APP_VERSION,
       kioskState: kiosk.state,
       syncQueueCount: store.pendingSyncCount(),
       localDbOk: db.pragma('quick_check', { simple: true }) === 'ok',
-      cpuTempC: readCpuTemperature(),
+      cpuTempC,
       sentAt: now().toISOString(),
       lockers: store.lockerSensorReports(),
       sync: sync.status(),

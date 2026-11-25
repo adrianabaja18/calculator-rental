@@ -64,7 +64,14 @@ const addLog = (level: string, message: string, data?: Record<string, unknown>) 
 const rentals = new RentalService(store, { deviceCode: 'DEVICE-SIMULATOR', now });
 const payments = new PaymentService(store, rentals, { now });
 const returns = new ReturnService(store, payments, { now });
-const kiosk = new KioskController(store, hw, { rentals, payments, returns }, { now, log: addLog });
+// Power saving like the real kiosk (sleeps after 2 min idle; SIM_SLEEP_SECONDS=0 to turn it off).
+const sleepSeconds = Number(process.env.SIM_SLEEP_SECONDS ?? 120);
+const kiosk = new KioskController(
+  store,
+  hw,
+  { rentals, payments, returns },
+  { now, log: addLog, sleepAfterMs: sleepSeconds * 1000, closedSleepAfterMs: 30_000 },
+);
 if (jumpedToOpening) addLog('info', 'Started outside operating hours: kiosk clock set to the next opening time');
 await kiosk.start();
 setInterval(() => void kiosk.tick(), 250);
@@ -107,6 +114,7 @@ async function snapshot() {
     time: now().toISOString(),
     offsetMinutes: Math.round(offsetMs / 60_000),
     coinsEnabled: hw.coins.enabled,
+    power: { backlight: hw.display.backlight, camera: hw.scanner.active, rfid: hw.rfid.powered },
     beeps: hw.buzzer.beeps.length,
     lastBeep: hw.buzzer.beeps.at(-1) ?? null,
     lockers,

@@ -18,7 +18,6 @@ const LIVE_TABLES = ['device_registry', 'lockers', 'device_commands'] as const;
 interface KioskHealth {
   kioskState?: string;
   clockDriftSeconds?: number;
-  powerState?: string;
   sync?: { lastPushAt: string | null; lastPullAt: string | null; lastError: string | null; failedItems: number } | null;
 }
 
@@ -76,7 +75,7 @@ export default async function DeviceStatusPage() {
             <dl className="mb-4 grid grid-cols-2 gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-3 lg:grid-cols-6">
               <Stat label="Last heartbeat">{formatRelative(d.last_heartbeat_at)}</Stat>
               <Stat label="Kiosk state">{humanize(health.kioskState)}</Stat>
-              <Stat label="Power">{humanize(health.powerState ?? 'AWAKE')}</Stat>
+              <Stat label="Power">{health.kioskState === 'SLEEPING' ? 'Asleep (saving power)' : 'Awake'}</Stat>
               <Stat label="CPU temperature" warn={temp !== null && temp >= 75}>
                 {temp === null ? '—' : `${temp.toFixed(1)} °C`}
               </Stat>

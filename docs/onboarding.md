@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-27, **operating hours** added after Phase 14
+> **Last updated:** 2026-11-27, **operating hours** and **power saving** added after Phase 14
 
 ---
 
@@ -50,7 +50,9 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ✅ Built and tested in software. ⏳ Needs `db:push` + a run against the live project (§6). |
 | 13 | Device monitoring, emergency unlock, event and audit logs, transactions, payments, penalties (waive) | ✅ Built and tested in software. ⏳ Needs `db:push` (§6). |
 | 14 | Kiosk simulator (browser), full-system scenario tests, hardware acceptance checklist | ✅ Built. ⏳ Hardware checklist to run on the real kiosk ([testing.md](testing.md) §3). |
-| 15 | Deployment and final documentation | ⬜ |
+| 14b | Operating hours: rental and late time count only while open; borrowing only while open | ✅ Built and tested in software (§6.0k) |
+| 14c | Power saving: idle sleep (LCD backlight, ESP32-CAM camera, RFID readers off), heat watch | ✅ Built and tested in software. ⏳ Re-flash the ESP32-CAM (1.1.0), test on hardware (§6). |
+| 15 | Deployment and final documentation | ⬜ Next |
 
 **Rule for the team:** a phase is finished only when its verification checklist passes. Don't start the next phase on top of a broken one.
 
@@ -68,6 +70,7 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 4 | Front-panel buttons | — | ✅ **Blue + red arcade button per locker** (decided 2026-11-25). Blue chooses the locker (GPIO 24/25); red = "door closed", which locks it (GPIO 22/23). No door sensors. |
 | 4b | Solenoid heat when held unlocked | Phase 11 bring-up | ⏳ The lock is held ON until the red button is pressed (up to 60/90 s). Run the heat check in `docs/raspberry-pi.md` §3.1; if the lock gets too hot, lower the removal/return timeouts in Settings. |
 | 5 | Real **RFID UIDs** of the two calculator tags | Phase 12 | ✅ Tag A `FE-AC-31-03` → CALC-001 (Locker 1), tag B `57-99-3B-03` → CALC-002 (Locker 2). ⚠️ **Enter them on the dashboard** (Calculators → Edit) before running the kiosk with sync, or the dashboard's fake seed UIDs replace them on the kiosk. |
+| 6b | **ESP32-CAM firmware 1.1.0** (power saving) | Power saving | ⏳ Re-flash the board (`firmware/esp32-cam/README.md` §2, §6). With 1.0.0 everything works except the camera never sleeps. |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
 | — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, **paid before the return locker opens** (2026-11-18). **Operating hours Mon–Fri 9 AM–5 PM; rental and late time count only while open** (2026-11-27, replaces counting overnight). All editable on the Settings page. |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
@@ -159,7 +162,38 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Operating hours and the new late-fee rule (after Phase 14)
+## 6. Power saving (after Phase 14)
+
+### What it does
+When nobody uses the kiosk, it **sleeps** after **2 min** idle on the ready screen (**30 s** when closed):
+- **ESP32-CAM camera off**: power-down pin, no decoding, CPU 240 → 80 MHz. This is the main heat and current saver.
+- **LCD backlight off**: the LCD shows `PRESS ANY BUTTON / TO START`, dim.
+- **RC522 readers off**: RST held LOW on GPIO 4/16, re-initialised on wake. Sensor polling pauses.
+
+**Any button** wakes it. That press only wakes it and never picks a locker. A coin, an officer unlock, or a scan also wakes it. It never sleeps in the middle of a rental or return.
+
+**Heat watch:** a WARNING event when the Pi's CPU reaches 75 °C, CRITICAL at 80 °C (at most every 30 min). **Devices** shows *Power: Asleep/Awake*.
+
+| Where | What |
+|---|---|
+| `firmware/esp32-cam/esp32-cam-qr/esp32-cam-qr.ino` | **v1.1.0**: own decoding loop (library camera setup + quirc), `{"cmd":"sleep"}` / `{"cmd":"wake"}`, `state` and `error` messages. Compiled with core 2.0.17. |
+| `apps/raspberry-pi/hw-bridge/hw_bridge.py` | **v1.3.0**: `backlight` and `rfid_power` commands; readers are re-initialised after power-down |
+| `apps/raspberry-pi/src/hardware/` | `scanner.setActive()`, `display.setBacklight()`, `rfid.setPower()` (real and mock). The scanner re-sends "sleep" if the ESP32 reboots while the kiosk sleeps. |
+| `apps/raspberry-pi/src/kiosk/` | New state `SLEEPING`; sleep after idle, wake on input; the error handler always turns everything back on |
+| `.env` | `POWER_SAVE=true`, `SLEEP_AFTER_SECONDS=120`, `CLOSED_SLEEP_AFTER_SECONDS=30` |
+| `hwcheck:pi` | `backlight on/off`, `rfidpower on/off` |
+| Simulator | Sleeps like the real kiosk (the LCD dims). `SIM_SLEEP_SECONDS=20` for a quick demo. |
+
+### Set it up
+1. **Re-flash the ESP32-CAM** with firmware 1.1.0 (`firmware/esp32-cam/README.md`), and check sleep/wake in the Serial Monitor (§6 there).
+2. Copy the three `POWER_SAVE` lines from `.env.example` into the Pi's `.env` (the defaults work without them).
+
+### Verification checklist
+- [ ] `npm test` passes (369 tests).
+- [ ] Simulator with `SIM_SLEEP_SECONDS=20`: after 20 s the LCD dims to `PRESS ANY BUTTON`. A button wakes it, and a coin wakes it (and is logged).
+- [ ] On the Pi: run [testing.md](testing.md) §3.3 (backlight, RFID power, camera sleep/wake ×5, coin wake, after-hours sleep).
+
+## 6.0k Operating hours and the new late-fee rule (after Phase 14)
 
 ### What changed (team decision 2026-11-27)
 - Settings have **operating hours** (default **Mon–Fri 9:00 AM–5:00 PM**), **closed dates** (holidays and suspensions), and **"rental time and late fees count only while open"** (on).

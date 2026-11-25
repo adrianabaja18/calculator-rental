@@ -69,6 +69,7 @@
         <button class="arcade red" data-button="close" data-locker="2" aria-label="Red button, locker 2">RED 2</button>
       </div>
       <p class="muted">The LCD flashes green / red / amber when the buzzer beeps OK / error / attention.</p>
+      <p class="muted" id="power"></p>
     </section>
 
     <section class="card">
@@ -179,7 +180,10 @@
   events.onmessage = (msg) => {
     const s = JSON.parse(msg.data);
     $('lcd').textContent = s.lcd.join('\n');
-    $('lcd').classList.toggle('dim', s.state === 'SLEEPING');
+    $('lcd').classList.toggle('dim', !s.power.backlight);
+    $('power').textContent = s.state === 'SLEEPING'
+      ? 'Power saving: asleep. Backlight, camera and RFID readers are off. Press any button (or insert a coin) to wake it.'
+      : 'Power: awake. The kiosk sleeps after 2 minutes idle (30 s when closed).';
     $('state').textContent = s.state.replace(/_/g, ' ');
     $('state').className = 'pill ' + (s.state === 'SYSTEM_READY' ? 'green' : s.state === 'ERROR' ? 'red' : 'amber');
     $('time').textContent = new Date(s.time).toLocaleString('en-PH', { timeZone: 'Asia/Manila', weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' (Manila)';

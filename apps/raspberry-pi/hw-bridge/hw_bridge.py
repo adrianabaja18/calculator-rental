@@ -15,6 +15,8 @@ Protocol: one JSON object per line.
     {"id":4,"cmd":"beep","pattern":"ok"|"error"|"attention"}
     {"id":5,"cmd":"read_rfid","channel":1}
     {"id":6,"cmd":"door","channel":1}
+    {"id":8,"cmd":"backlight","on":false}             power saving: LCD backlight off/on
+    {"id":9,"cmd":"rfid_power","on":false}            power saving: RC522s held in reset (needs RST pins)
     mock mode only: {"cmd":"mock_coin","pulses":5}  {"cmd":"mock_tag","channel":1,"uid":"04-..."|null}
                     {"cmd":"mock_button","kind":"select"|"close","channel":1}
   bridge -> Node (stdout):
@@ -35,7 +37,7 @@ import sys
 import threading
 import time
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 _out_lock = threading.Lock()
 
 
@@ -99,6 +101,10 @@ class MFRC522:
         self.spi.open(bus, device)
         self.spi.max_speed_hz = 1_000_000
         self.spi.mode = 0
+        self.init()
+
+    def init(self):
+        """(Re)configures the chip. Also needed after a hard power-down (RST LOW), which clears its registers."""
         self.write(self.CommandReg, self.SOFT_RESET)
         time.sleep(0.05)
         self.write(self.TModeReg, 0x8D)  # timer: auto, prescaler
@@ -221,6 +227,7 @@ class Lcd:
             from smbus import SMBus
         self.bus = SMBus(i2c_bus)
         self.addr = address
+        self.backlight_bit = self.BACKLIGHT
         time.sleep(0.05)
         for nibble in (0x03, 0x03, 0x03, 0x02):  # HD44780 4-bit init sequence
             self._write4(nibble, 0)
@@ -230,7 +237,7 @@ class Lcd:
         time.sleep(0.002)
 
     def _write4(self, nibble, rs):
-        data = ((nibble & 0x0F) << 4) | self.BACKLIGHT | rs
+        data = ((nibble & 0x0F) << 4) | self.backlight_bit | rs
         self.bus.write_byte(self.addr, data | self.EN)
         time.sleep(0.0005)
         self.bus.write_byte(self.addr, data)
@@ -245,6 +252,11 @@ class Lcd:
             self._send(0x80 | (0x00 if row == 0 else 0x40), 0)
             for ch in str(text)[:16].ljust(16):
                 self._send(ord(ch) if 32 <= ord(ch) < 127 else ord("?"), self.RS)
+
+    def set_backlight(self, on):
+        """Power saving: the backlight LED is most of the LCD's current (and heat)."""
+        self.backlight_bit = self.BACKLIGHT if on else 0
+        self.bus.write_byte(self.addr, self.backlight_bit)
 
 
 # --------------------------------------------------------------------------
@@ -296,6 +308,12 @@ class MockHardware:
     def mock_button(self, kind, channel):
         emit({"type": "button", "kind": kind, "channel": channel})
 
+    def backlight(self, on):
+        self.backlight_on = on
+
+    def rfid_power(self, on):
+        self.rfid_on = on
+
 
 class RealHardware:
     """Raspberry Pi I/O. Each device is optional: a missing one is reported, not fatal."""
@@ -336,6 +354,7 @@ class RealHardware:
         # so hard-reset each reader once and then keep RST HIGH for as long as the bridge runs.
         # (GPIO 16 defaults to pull-DOWN at boot, which would keep reader 2 off.)
         self.rfid_resets = [OutputDevice(pin, initial_value=False) for pin in args.rfid_rst_pins]
+        self.rfid_on = True
         if self.rfid_resets:
             time.sleep(0.05)
             for rst in self.rfid_resets:
@@ -396,6 +415,26 @@ class RealHardware:
         if self.display:
             self.display.show(lines)
 
+    def backlight(self, on):
+        if self.display:
+            self.display.set_backlight(on)
+
+    def rfid_power(self, on):
+        """Off: RST LOW = RC522 hard power-down (microamps). On: release RST and set the chips up again.
+        Without RST wired to GPIOs (RST on 3.3 V) this does nothing: the antenna is already off between reads."""
+        if not self.rfid_resets or on == self.rfid_on:
+            return
+        self.rfid_on = on
+        for rst in self.rfid_resets:
+            rst.on() if on else rst.off()
+        if on:
+            time.sleep(0.05)  # oscillator start-up
+            for channel, reader in self.readers.items():
+                try:
+                    reader.init()
+                except Exception as exc:  # noqa: BLE001
+                    log("warn", "RFID reader %d did not wake up: %s" % (channel, exc))
+
     def beep(self, pattern):
         if not self.buzzer:
             return
@@ -404,7 +443,7 @@ class RealHardware:
 
     def read_rfid(self, channel):
         reader = self.readers.get(channel)
-        if reader is None:
+        if reader is None or not self.rfid_on:
             return None, False
         try:
             return reader.read_uid(), True
@@ -433,6 +472,12 @@ def handle(hw, msg):
             return {"type": "ok", "id": rid}
         if cmd == "lock":
             hw.lock(int(msg["channel"]))
+            return {"type": "ok", "id": rid}
+        if cmd == "backlight":
+            hw.backlight(bool(msg.get("on", True)))
+            return {"type": "ok", "id": rid}
+        if cmd == "rfid_power":
+            hw.rfid_power(bool(msg.get("on", True)))
             return {"type": "ok", "id": rid}
         if cmd == "lcd":
             lines = msg.get("lines") or ["", ""]

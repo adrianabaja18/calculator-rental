@@ -45,6 +45,13 @@ export interface KioskOptions {
   selectTimeoutMs?: number;
   /** Sensor states are written to SQLite on change, and at least this often. */
   sensorWriteIntervalMs?: number;
+  /**
+   * Power saving: idle this long on the ready screen → sleep (LCD backlight,
+   * camera and RFID readers off; any button wakes it). 0 = never sleep.
+   */
+  sleepAfterMs?: number;
+  /** Shorter idle time before sleeping while closed (outside operating hours). */
+  closedSleepAfterMs?: number;
   now?: () => Date;
   log?: (level: 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
 }
@@ -84,9 +91,13 @@ export class KioskController {
   private queue: Promise<void> = Promise.resolve();
   private readonly sensors = new Map<string, SensorSnapshot>();
   private lastHousekeeping = 0;
+  /** Last input or state change (power saving idles from here). */
+  private lastActivity = 0;
   private readonly messageMs: number;
   private readonly selectTimeoutMs: number;
   private readonly sensorWriteIntervalMs: number;
+  private readonly sleepAfterMs: number;
+  private readonly closedSleepAfterMs: number;
   private readonly now: () => Date;
   private readonly log: NonNullable<KioskOptions['log']>;
 
@@ -99,6 +110,8 @@ export class KioskController {
     this.messageMs = options.messageMs ?? 4000;
     this.selectTimeoutMs = options.selectTimeoutMs ?? 30_000;
     this.sensorWriteIntervalMs = options.sensorWriteIntervalMs ?? 30_000;
+    this.sleepAfterMs = options.sleepAfterMs ?? 0;
+    this.closedSleepAfterMs = options.closedSleepAfterMs ?? 30_000;
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (() => {});
   }
@@ -154,7 +167,11 @@ export class KioskController {
   }
 
   handleButton(kind: ButtonKind, channel: number): Promise<void> {
-    return this.enqueue(() => (kind === 'select' ? this.onSelect(channel) : this.onClose(channel)));
+    return this.enqueue(async () => {
+      // Asleep: the press only wakes the kiosk (a student shouldn't pick a locker by accident).
+      if (this.state === KioskState.SLEEPING) return this.wake(`${kind} button`);
+      return kind === 'select' ? this.onSelect(channel) : this.onClose(channel);
+    });
   }
 
   tick(): Promise<void> {
@@ -174,6 +191,7 @@ export class KioskController {
 
   // ------------------------------------------------------------------ scan
   private async onScan(raw: string) {
+    if (this.state === KioskState.SLEEPING) await this.wake('scan'); // camera was still on: serve the student
     if (this.state !== KioskState.SYSTEM_READY) {
       this.log('info', 'Scan ignored: kiosk busy', { state: this.state });
       return;
@@ -261,6 +279,7 @@ export class KioskController {
 
   // ------------------------------------------------------------------ coins
   private async onCoin(coin: CoinInput) {
+    if (this.state === KioskState.SLEEPING) await this.wake('coin');
     const paying = this.state === KioskState.WAITING_FOR_PAYMENT || this.state === KioskState.WAITING_FOR_PENALTY_PAYMENT;
     if (!paying || !this.flow) {
       this.services.payments.insertCoin(null, coin); // recorded for refund (Rule 23)
@@ -346,6 +365,7 @@ export class KioskController {
   }
 
   private async onOfficerUnlock(lockerId: string, info: { commandId: string; requestedBy?: string }) {
+    if (this.state === KioskState.SLEEPING) await this.wake('officer unlock');
     if (this.state !== KioskState.SYSTEM_READY) {
       return { ok: false, message: `The kiosk is busy (${this.state}). Try again when no student is using it.` };
     }
@@ -378,16 +398,18 @@ export class KioskController {
       return;
     }
 
-    await this.pollSensors(now);
+    // Asleep the RFID readers are powered down: nothing to read until a button wakes the kiosk.
+    if (this.state !== KioskState.SLEEPING) await this.pollSensors(now);
 
     switch (this.state) {
       case KioskState.SYSTEM_READY:
-        if (now - this.lastHousekeeping > 60_000) {
-          this.lastHousekeeping = now;
-          this.services.returns.markOverdueRentals();
-          this.services.payments.expireSessions(); // leftovers from a crash/reboot
-        }
-        return this.show(this.idleScreen()); // redrawn only on change
+        this.housekeeping(now);
+        await this.show(this.idleScreen()); // redrawn only on change
+        return this.maybeSleep(now);
+
+      case KioskState.SLEEPING:
+        this.housekeeping(now);
+        return;
 
       case KioskState.SELECTING_LOCKER:
         if (now > this.selection!.deadline) {
@@ -585,10 +607,47 @@ export class KioskController {
     await this.show(this.idleScreen());
   }
 
+  private housekeeping(now: number) {
+    if (now - this.lastHousekeeping <= 60_000) return;
+    this.lastHousekeeping = now;
+    this.services.returns.markOverdueRentals();
+    this.services.payments.expireSessions(); // leftovers from a crash/reboot
+  }
+
+  // ------------------------------------------------------------------ power saving
+  /** Idle long enough on the ready screen (shorter while closed) → sleep. */
+  private async maybeSleep(now: number) {
+    if (this.sleepAfterMs <= 0) return;
+    const settings = this.store.getSettings();
+    const closed = !!settings && !isOpenAt(new Date(now), operatingCalendar(settings));
+    const limit = closed ? Math.min(this.sleepAfterMs, this.closedSleepAfterMs) : this.sleepAfterMs;
+    if (now - this.lastActivity < limit) return;
+
+    this.move(KioskState.SLEEPING);
+    await this.show(LCD.sleeping(closed));
+    await this.hw.display.setBacklight(false);
+    await this.hw.scanner.setActive(false);
+    await this.hw.rfid.setPower(false);
+    this.log('info', 'Power saving: asleep (LCD backlight, camera and RFID readers off)');
+  }
+
+  /** Back to normal: readers, camera and backlight on, fresh sensor readings, ready screen. */
+  private async wake(reason: string) {
+    await this.hw.rfid.setPower(true);
+    await this.hw.scanner.setActive(true);
+    await this.hw.display.setBacklight(true);
+    this.move(KioskState.SYSTEM_READY);
+    await this.pollSensors(this.now().getTime());
+    await this.show(this.idleScreen());
+    await this.hw.buzzer.beep('ok');
+    this.log('info', `Woke up (${reason})`);
+  }
+
   private move(to: KioskState) {
     if (!canMove(this.state, to)) throw new Error(`Kiosk cannot go from ${this.state} to ${to}`);
     this.log('info', `Kiosk ${this.state} -> ${to}`, { rentalId: this.flow?.rentalId });
     this.state = to;
+    this.lastActivity = this.now().getTime(); // any step counts as activity for power saving
   }
 
   private show(lcd: LcdScreen) {
@@ -619,6 +678,10 @@ export class KioskController {
       this.holdUntil = this.now().getTime() + this.messageMs;
       if (channel !== undefined) await this.hw.lockers.lock(channel).catch(() => {});
       await this.hw.coins.setEnabled(false).catch(() => {});
+      // Never leave the kiosk dark or blind after a failure (e.g. during sleep/wake).
+      await this.hw.display.setBacklight(true).catch(() => {});
+      await this.hw.scanner.setActive(true).catch(() => {});
+      await this.hw.rfid.setPower(true).catch(() => {});
       await this.hw.buzzer.beep('error').catch(() => {});
       await this.show(LCD.systemError()).catch(() => {});
     });

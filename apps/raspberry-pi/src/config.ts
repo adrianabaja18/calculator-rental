@@ -46,6 +46,10 @@ const ConfigSchema = z.object({
   DOOR_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default(''),
   SELECT_BUTTON_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('24,25'),
   CLOSE_BUTTON_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('22,23'),
+  /** Power saving: sleep when idle (LCD backlight, ESP32-CAM camera, RFID readers off). */
+  POWER_SAVE: booleanTrue,
+  SLEEP_AFTER_SECONDS: z.coerce.number().int().min(15).max(3600).default(120),
+  CLOSED_SLEEP_AFTER_SECONDS: z.coerce.number().int().min(10).max(3600).default(30),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   LOG_PRETTY: booleanString,
   HTTP_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(8000),

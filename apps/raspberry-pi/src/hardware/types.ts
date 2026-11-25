@@ -14,6 +14,8 @@ import type { LcdScreen } from '../kiosk/lcd';
 /** ESP32-CAM over USB serial (Phase 10). Emits the RAW QR text. */
 export interface QRScanner {
   onScan(handler: (raw: string) => void): void;
+  /** Power management: camera on (true) or asleep (false). */
+  setActive(active: boolean): Promise<void>;
 }
 
 /** Allan 1239 coin selector: pulses on GPIO 17, power via a relay (Phase 11). */
@@ -33,6 +35,8 @@ export interface RfidReading {
 /** One RC522 per locker on SPI (Phase 11). */
 export interface RFIDReader {
   read(channel: number): Promise<RfidReading>;
+  /** Power management: readers held in reset (off) while the kiosk sleeps. */
+  setPower(on: boolean): Promise<void>;
 }
 
 /** 12 V solenoid locks through relays, optional reed switches (Phase 11). */
@@ -57,6 +61,8 @@ export interface ButtonPanel {
 /** 16×2 I2C LCD (Phase 11). */
 export interface DisplayController {
   show(screen: LcdScreen): Promise<void>;
+  /** Power management: LCD backlight off while the kiosk sleeps. */
+  setBacklight(on: boolean): Promise<void>;
 }
 
 export type BeepPattern = 'ok' | 'error' | 'attention';

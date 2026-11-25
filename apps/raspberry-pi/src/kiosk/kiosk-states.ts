@@ -27,6 +27,8 @@ export const KioskState = {
   RETURN_COMPLETE: 'RETURN_COMPLETE',
   // officers
   OFFICER_UNLOCK: 'OFFICER_UNLOCK', // emergency unlock from the dashboard (Phase 13)
+  // power management
+  SLEEPING: 'SLEEPING', // idle: LCD backlight, camera and RFID readers off until a button is pressed
   // messages & faults
   SHOWING_MESSAGE: 'SHOWING_MESSAGE',
   ERROR: 'ERROR',
@@ -39,8 +41,9 @@ const S = KioskState;
 export const KIOSK_TRANSITIONS: Readonly<Record<KioskState, readonly KioskState[]>> = {
   [S.STARTING]: [S.WAITING_FOR_CLOCK, S.SYSTEM_READY],
   [S.WAITING_FOR_CLOCK]: [S.SYSTEM_READY],
-  [S.SYSTEM_READY]: [S.VALIDATING_STUDENT, S.OFFICER_UNLOCK],
+  [S.SYSTEM_READY]: [S.VALIDATING_STUDENT, S.OFFICER_UNLOCK, S.SLEEPING],
   [S.OFFICER_UNLOCK]: [S.SYSTEM_READY],
+  [S.SLEEPING]: [S.SYSTEM_READY],
   [S.VALIDATING_STUDENT]: [S.SELECTING_LOCKER, S.RETURN_IDENTIFIED, S.SHOWING_MESSAGE],
   [S.SELECTING_LOCKER]: [S.WAITING_FOR_PAYMENT, S.SHOWING_MESSAGE],
   [S.WAITING_FOR_PAYMENT]: [S.OPENING_LOCKER, S.SHOWING_MESSAGE],
