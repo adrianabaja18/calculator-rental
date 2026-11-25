@@ -42,7 +42,7 @@ async function startBridge() {
 describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
   it('starts and reports its devices', async () => {
     const { ready } = await startBridge();
-    expect(ready).toMatchObject({ type: 'ready', mode: 'mock', version: '1.1.0' });
+    expect(ready).toMatchObject({ type: 'ready', mode: 'mock', version: '1.2.0' });
   });
 
   it('holds a relay, locks it early, and refuses unsafe hold times', async () => {

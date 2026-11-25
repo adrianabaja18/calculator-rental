@@ -161,6 +161,16 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ## 6. Phase 11 hand-off: real hardware drivers
 
+### Phase 11d update (2026-11-26): final wiring, RC522 RST on GPIO
+The team confirmed the final wiring. It matches the code except for these changes:
+- **RC522 RST** now goes to **GPIO 4 (pin 7)** for reader 1 and **GPIO 16 (pin 36)** for reader 2, instead of 3.3 V.
+  - New setting `RFID_RST_PINS=4,16`. The bridge (v1.2.0) pulses both pins LOW and then holds them HIGH.
+  - Without this, reader 2 would stay in reset, because GPIO 16 is pulled down at boot.
+  - The pin-clash check covers these pins too.
+- **PC817:** a 10 kΩ pull-up from 3.3 V (pin 17) to the collector/GPIO 17, and the emitter on GND pin 20. The internal pull-up stays on too; the two in parallel are harmless.
+- **5 V:** pin 2 feeds the LCD and pin 4 feeds the relay module.
+- `docs/raspberry-pi.md` pin map and `docs/wiring-guide.pdf` are updated.
+
 ### Phase 11c update (2026-11-25): blue/red front-panel buttons
 The team built a front panel: `[BLUE 1] [RED 1]  [LCD]  [BLUE 2] [RED 2]`. Wiring is in `docs/raspberry-pi.md` §3.7, and the student steps are in `docs/renter-guide.md`.
 - **Idle LCD:** `SCAN STUDENT ID` / `1:READY 2:N/A`, kept up to date from the RFID readers.

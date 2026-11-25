@@ -41,7 +41,7 @@ if (!ready) {
   process.exit(1);
 }
 console.log(`\nHardware bridge ${ready.version} (${ready.mode}) — devices found:`, ready.devices);
-console.log(`Pins: relays ${config.RELAY_PINS} (${config.RELAY_ACTIVE_LOW ? 'active-LOW' : 'active-HIGH'}), coin ${config.COIN_PIN}, buzzer ${config.BUZZER_PIN}, RFID SPI ${config.RFID_SPI}, LCD ${config.LCD_I2C_ADDRESS}, doors ${config.DOOR_PINS || 'none'}`);
+console.log(`Pins: relays ${config.RELAY_PINS} (${config.RELAY_ACTIVE_LOW ? 'active-LOW' : 'active-HIGH'}), coin ${config.COIN_PIN}, buzzer ${config.BUZZER_PIN}, RFID SPI ${config.RFID_SPI} (RST ${config.RFID_RST_PINS || '3.3V'}), LCD ${config.LCD_I2C_ADDRESS}, doors ${config.DOOR_PINS || 'none'}`);
 console.log(`Buttons: blue ${config.SELECT_BUTTON_PINS || 'none'}, red ${config.CLOSE_BUTTON_PINS || 'none'} (press them any time)`);
 console.log('Commands: lcd [text] | beep [ok|error|attention] | unlock <1..n> | lock <1..n> | rfid | watch | quit\n');
 
