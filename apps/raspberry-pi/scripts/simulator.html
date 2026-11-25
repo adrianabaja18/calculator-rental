@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiosk Simulator</title>
+<style>
+  :root {
+    --bg: #f1f5f9; --card: #ffffff; --ink: #0f172a; --muted: #64748b; --line: #e2e8f0;
+    --blue: #1e6fd9; --red: #d93025; --green: #15803d; --amber: #b45309;
+    --lcd-bg: #2e5e3a; --lcd-ink: #d7f5c8; --panel: #1f2937;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 20px; background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 18px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #e2e8f0; color: #334155; }
+  .pill.green { background: #dcfce7; color: var(--green); } .pill.amber { background: #fef3c7; color: var(--amber); } .pill.red { background: #fee2e2; color: var(--red); }
+  main { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; max-width: 1200px; margin: 0 auto; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; padding: 16px; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .front { background: var(--panel); border-radius: 12px; padding: 20px 16px; display: grid; grid-template-columns: auto auto 1fr auto auto; align-items: center; gap: 10px; }
+  @media (max-width: 560px) { .front { grid-template-columns: 1fr 1fr; } .lcd { grid-column: 1 / -1; order: -1; } }
+  .arcade { width: 64px; height: 64px; border-radius: 50%; border: 5px solid #f8fafc; color: #fff; font-weight: 700; font-size: 11px; cursor: pointer; transition: transform .08s ease-out, filter .15s; }
+  .arcade:active { transform: scale(.94); } .arcade:hover { filter: brightness(1.1); }
+  .arcade.blue { background: var(--blue); } .arcade.red { background: var(--red); }
+  .locker-label { grid-row: 1; color: #cbd5e1; font-size: 11px; text-align: center; }
+  .lcd { justify-self: center; background: var(--lcd-bg); color: var(--lcd-ink); font: 700 20px/1.25 ui-monospace, Consolas, monospace; padding: 12px 14px; border-radius: 6px; border: 4px solid #111; white-space: pre; letter-spacing: .06em; transition: box-shadow .2s; }
+  .lcd.dim { filter: brightness(.45); }
+  .lcd.flash-ok { box-shadow: 0 0 0 4px #22c55e; } .lcd.flash-error { box-shadow: 0 0 0 4px #ef4444; } .lcd.flash-attention { box-shadow: 0 0 0 4px #f59e0b; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button.btn { border: 1px solid #cbd5e1; background: #fff; color: var(--ink); border-radius: 6px; padding: 7px 12px; font-weight: 600; cursor: pointer; transition: background .15s, transform .08s ease-out; }
+  button.btn:hover { background: #f8fafc; } button.btn:active { transform: scale(.97); }
+  button.btn.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  button.coin { border-radius: 50%; width: 52px; height: 52px; background: #e7d38f; border: 3px solid #b8a35a; font-weight: 800; cursor: pointer; transition: transform .08s ease-out; }
+  button.coin:active { transform: scale(.93); }
+  select, textarea { font: inherit; border: 1px solid #cbd5e1; border-radius: 6px; padding: 7px 9px; background: #fff; }
+  textarea { width: 100%; min-height: 54px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .stack { display: grid; gap: 16px; }
+  .locker { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+  .locker-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .log { font: 12px/1.5 ui-monospace, Consolas, monospace; max-height: 260px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+  .log li { padding: 3px 0; border-bottom: 1px solid #f1f5f9; }
+  .log .warn { color: var(--amber); } .log .error { color: var(--red); }
+  .err { color: var(--red); font-size: 12px; min-height: 16px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kiosk Simulator</h1>
+  <span id="state" class="pill">…</span>
+  <span id="time" class="muted"></span>
+  <span id="mode" class="pill"></span>
+  <span id="outbox" class="muted"></span>
+</header>
+
+<main>
+  <div class="stack">
+    <section class="card" aria-label="Kiosk front panel">
+      <h2>Front panel</h2>
+      <div class="front">
+        <button class="arcade blue" data-button="select" data-locker="1" aria-label="Blue button, locker 1">BLUE 1</button>
+        <button class="arcade red" data-button="close" data-locker="1" aria-label="Red button, locker 1">RED 1</button>
+        <div id="lcd" class="lcd" aria-live="polite">                &#10;                </div>
+        <button class="arcade blue" data-button="select" data-locker="2" aria-label="Blue button, locker 2">BLUE 2</button>
+        <button class="arcade red" data-button="close" data-locker="2" aria-label="Red button, locker 2">RED 2</button>
+      </div>
+      <p class="muted">The LCD flashes green / red / amber when the buzzer beeps OK / error / attention.</p>
+    </section>
+
+    <section class="card">
+      <h2>Student scans their ID</h2>
+      <div class="row">
+        <select id="student" aria-label="Fake student"></select>
+        <button class="btn primary" id="scan">Scan ID</button>
+      </div>
+      <details style="margin-top:10px">
+        <summary class="muted">Scan any QR text (name, tab, 10-digit number, tab, course)</summary>
+        <textarea id="customQr" placeholder="JUAN DELA CRUZ&#9;2022100001&#9;BSCpE"></textarea>
+        <button class="btn" id="scanCustom">Scan this text</button>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Coin slot</h2>
+      <div class="row">
+        <button class="coin" data-coin="1">₱1</button>
+        <button class="coin" data-coin="5">₱5</button>
+        <button class="coin" data-coin="10">₱10</button>
+        <button class="coin" data-coin="20">₱20</button>
+        <span id="coins" class="muted"></span>
+      </div>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="card">
+      <h2>Lockers (what the student does inside)</h2>
+      <div id="lockers" class="stack"></div>
+      <p id="err" class="err" role="alert"></p>
+    </section>
+
+    <section class="card">
+      <h2>Kiosk clock</h2>
+      <div class="row">
+        <button class="btn" data-advance="10">+10 min</button>
+        <button class="btn" data-advance="60">+1 hour</button>
+        <button class="btn" data-advance="240">+4 hours</button>
+        <button class="btn" data-advance="1440">+1 day</button>
+        <span id="offset" class="muted"></span>
+      </div>
+      <p class="muted">Move time forward to try late returns and penalties.</p>
+    </section>
+
+    <section class="card">
+      <h2>Kiosk log</h2>
+      <ul id="log" class="log"></ul>
+    </section>
+  </div>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const tag = { '04-A1-B2-C3-D4': 'CALC-001', '04-E5-F6-A7-B8': 'CALC-002' };
+  let lastBeeps = null;
+  let lastLockers = '';
+  let lastLog = '';
+
+  async function act(body) {
+    $('err').textContent = '';
+    const res = await fetch('/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const out = await res.json();
+    if (!out.ok) $('err').textContent = out.error;
+  }
+
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('button');
+    if (!t) return;
+    if (t.dataset.button) act({ type: 'button', kind: t.dataset.button, locker: Number(t.dataset.locker) });
+    else if (t.dataset.coin) act({ type: 'coin', pesos: Number(t.dataset.coin) });
+    else if (t.dataset.advance) act({ type: 'advance', minutes: Number(t.dataset.advance) });
+    else if (t.dataset.take) act({ type: 'take', locker: Number(t.dataset.take) });
+    else if (t.dataset.put) act({ type: 'put', locker: Number(t.dataset.put), tag: t.dataset.tag });
+    else if (t.id === 'scan') act({ type: 'scan', qr: $('student').value });
+    else if (t.id === 'scanCustom') act({ type: 'scan', qr: $('customQr').value });
+  });
+
+  fetch('/students').then((r) => r.json()).then((students) => {
+    for (const [name, qr] of Object.entries(students)) {
+      const o = document.createElement('option');
+      o.value = qr;
+      o.textContent = qr.split('\t')[0] + (name === 'ana' ? ' (blocked)' : '');
+      $('student').append(o);
+    }
+  });
+
+  function renderLockers(lockers) {
+    $('lockers').innerHTML = lockers.map((l) => `
+      <div class="locker">
+        <div class="locker-head">
+          <span>Locker ${l.number}</span>
+          <span class="pill ${l.unlocked ? 'amber' : 'green'}">${l.unlocked ? 'UNLOCKED' : 'LOCKED'}</span>
+        </div>
+        <div class="muted">Inside: <strong>${l.tag ? (tag[l.tag] || 'unknown tag ' + l.tag) : 'nothing'}</strong>
+          · belongs here: ${l.expected ? (tag[l.expected] || l.expected) : 'none'}</div>
+        <div class="row">
+          <button class="btn" data-take="${l.number}">Take calculator</button>
+          <button class="btn" data-put="${l.number}" data-tag="calc1">Put CALC-001</button>
+          <button class="btn" data-put="${l.number}" data-tag="calc2">Put CALC-002</button>
+          <button class="btn" data-put="${l.number}" data-tag="unknown">Put something else</button>
+        </div>
+      </div>`).join('');
+  }
+
+  const events = new EventSource('/events');
+  events.onmessage = (msg) => {
+    const s = JSON.parse(msg.data);
+    $('lcd').textContent = s.lcd.join('\n');
+    $('lcd').classList.toggle('dim', s.state === 'SLEEPING');
+    $('state').textContent = s.state.replace(/_/g, ' ');
+    $('state').className = 'pill ' + (s.state === 'SYSTEM_READY' ? 'green' : s.state === 'ERROR' ? 'red' : 'amber');
+    $('time').textContent = new Date(s.time).toLocaleString('en-PH', { timeZone: 'Asia/Manila', weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' (Manila)';
+    $('mode').textContent = s.sync ? 'syncing' : 'offline';
+    $('mode').className = 'pill ' + (s.sync ? 'green' : '');
+    $('outbox').textContent = s.outbox + ' change(s) waiting to sync';
+    $('coins').textContent = s.coinsEnabled ? 'Waiting for coins' : 'Not expecting coins (they are logged for refund)';
+    $('offset').textContent = s.offsetMinutes ? `${s.offsetMinutes} min ahead of real time` : '';
+    // Rebuild only on change, so a click never lands on a button that was just replaced.
+    const lockersKey = JSON.stringify(s.lockers);
+    if (lockersKey !== lastLockers) { lastLockers = lockersKey; renderLockers(s.lockers); }
+    const logKey = JSON.stringify(s.log);
+    if (logKey === lastLog) return finish(s);
+    lastLog = logKey;
+    $('log').innerHTML = s.log.map((l) => `<li class="${l.level}">${new Date(l.at).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila' })} ${l.message.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c])}</li>`).join('');
+    finish(s);
+  };
+
+  function finish(s) {
+    if (lastBeeps !== null && s.beeps > lastBeeps && s.lastBeep) {
+      const cls = 'flash-' + s.lastBeep;
+      $('lcd').classList.add(cls);
+      setTimeout(() => $('lcd').classList.remove(cls), 350);
+    }
+    lastBeeps = s.beeps;
+  }
+  events.onerror = () => { $('state').textContent = 'simulator stopped'; $('state').className = 'pill red'; };
+</script>
+</body>
+</html>

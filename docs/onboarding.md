@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-27, end of **Phase 13** (monitoring and officer tools)
+> **Last updated:** 2026-11-27, end of **Phase 14** (simulator and system tests)
 
 ---
 
@@ -49,7 +49,7 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer, front-panel buttons (Python helper) | ✅ Built and tested in software. ⏳ Bring-up on the Pi (§6.0g). |
 | 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ✅ Built and tested in software. ⏳ Needs `db:push` + a run against the live project (§6). |
 | 13 | Device monitoring, emergency unlock, event and audit logs, transactions, payments, penalties (waive) | ✅ Built and tested in software. ⏳ Needs `db:push` (§6). |
-| 14 | Testing, simulator, system validation | ⬜ |
+| 14 | Kiosk simulator (browser), full-system scenario tests, hardware acceptance checklist | ✅ Built. ⏳ Hardware checklist to run on the real kiosk ([testing.md](testing.md) §3). |
 | 15 | Deployment and final documentation | ⬜ |
 
 **Rule for the team:** a phase is finished only when its verification checklist passes. Don't start the next phase on top of a broken one.
@@ -159,7 +159,24 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 13 hand-off: monitoring and officer tools
+## 6. Phase 14 hand-off: simulator and system testing
+
+### Built
+- **Kiosk simulator**: `npm run sim:pi`, then open http://localhost:4040.
+  - It's the real kiosk program on simulated hardware: an LCD, the 4 front-panel buttons, a coin slot, ID scans, what the student does inside each locker, a clock you can move forward, and the live log.
+  - `--fresh` starts over; `--sync` also syncs with the backend so the dashboard shows it.
+  - It uses its own `data/simulator.db`.
+- **Full-system scenario tests** (`apps/raspberry-pi/src/full-system.test.ts`): the kiosk + simulated hardware + sync + the real Supabase migrations. Scenarios: an offline day then reconnecting, a late return with penalty, a power cut after payment, officer block, maintenance, a price change, emergency unlock, and a penalty waiver.
+- `src/sync/test-supabase.ts`: a test-only helper (PGlite + a transport that behaves like the sync API).
+- **[docs/testing.md](testing.md)**: every automated suite, things to try in the simulator, and the **hardware acceptance checklist** for the real kiosk.
+- The fake student QR codes now live in `dev-seed.ts` (`DEV_STUDENT_QR`), shared by the console and the simulator.
+
+### Phase 14 verification checklist
+- [ ] `npm test` passes (332 tests).
+- [ ] `npm run sim:pi -- --fresh`, then open http://localhost:4040 and do the 7 "try these" steps in testing.md §2.
+- [ ] Optional: with the web app running, `npm run sim:pi -- --sync`. A simulated borrow appears on the dashboard.
+
+## 6.0i Phase 13 hand-off (completed in software): monitoring and officer tools
 
 ### Built
 | Page / part | What officers get |

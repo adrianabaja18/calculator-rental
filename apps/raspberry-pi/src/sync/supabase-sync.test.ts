@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DoorState, type SyncItem } from '@calc-rental/shared';
 import { DEV_IDS, DEV_RFID, seedDevData } from '../db/dev-seed';
@@ -11,6 +8,7 @@ import { openLocalDatabase } from '../db/sqlite';
 import { PaymentService } from '../payment/payment-service';
 import { RentalService } from '../rental/rental-service';
 import { ReturnService } from '../rental/return-service';
+import { SEED_DEVICE_ID as DEVICE, startTestSupabase } from './test-supabase';
 
 /**
  * End-to-end sync test: REAL kiosk flows on SQLite produce the outbox, and the
@@ -19,9 +17,6 @@ import { ReturnService } from '../rental/return-service';
  * ownership rules fit together — no network, no Supabase project needed.
  */
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const supabaseDir = path.resolve(here, '../../../../supabase');
-const DEVICE = '00000000-0000-4000-8000-000000000001';
 const JUAN_QR = 'JUAN DELA CRUZ\t2022100001\tBSCpE';
 const HOUR = 3_600_000;
 
@@ -33,12 +28,7 @@ let returns: ReturnService;
 let clock: Date;
 
 beforeAll(async () => {
-  pg = new PGlite();
-  await pg.exec(fs.readFileSync(path.join(supabaseDir, 'tests/supabase-stubs.sql'), 'utf8'));
-  for (const file of fs.readdirSync(path.join(supabaseDir, 'migrations')).filter((f) => f.endsWith('.sql')).sort()) {
-    await pg.exec(fs.readFileSync(path.join(supabaseDir, 'migrations', file), 'utf8'));
-  }
-  await pg.exec(fs.readFileSync(path.join(supabaseDir, 'seed.sql'), 'utf8'));
+  pg = await startTestSupabase();
 }, 120_000);
 
 afterAll(async () => {

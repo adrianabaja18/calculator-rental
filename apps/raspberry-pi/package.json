@@ -12,7 +12,8 @@
     "demo:rental": "tsx scripts/demo-rental.ts",
     "seed:dev": "tsx scripts/seed-dev.ts",
     "scanner:test": "tsx scripts/scanner-test.ts",
-    "hw:check": "tsx scripts/hw-check.ts"
+    "hw:check": "tsx scripts/hw-check.ts",
+    "sim": "tsx scripts/simulator.ts"
   },
   "dependencies": {
     "@calc-rental/shared": "0.1.0",
