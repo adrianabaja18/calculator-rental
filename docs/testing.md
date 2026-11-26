@@ -56,7 +56,7 @@ Run these in order on the assembled kiosk. Each step says what must happen. If o
 - [ ] `lcd HELLO` shows on the LCD (adjust contrast if blank).
 - [ ] `beep ok` / `beep error` sound.
 - [ ] `unlock 1` / `unlock 2`: that relay clicks, the solenoid pulls, and it releases after 3 s. At rest both relay LEDs are off.
-- [ ] **Heat check:** set `LOCK_PULSE_MS=60000`, run `unlock 1`, and touch the solenoid after 60 s. If it's too hot to hold, lower the removal/return timeouts in Settings. Set it back to 3000 afterwards.
+- [ ] **10-second window:** after paying, the LCD counts `LOCKS IN 10 SEC` down with a buzzer tick each second, and the lock drops at 0. Check a student can take the calculator and shut the door in time, and that blue gives another 10 s when they can't.
 - [ ] `rfid`: both readers answer (`no tag`, not `NOT RESPONDING`).
 - [ ] `watch`: tag A over reader 1 shows `FE-AC-31-03`, tag B over reader 2 shows `57-99-3B-03`, and removing them shows `no tag`. Test with the tags **inside the calculators, in the lockers**.
 - [ ] Coins: ₱1, ₱5, ₱10, ₱20 (old and new designs) show `COIN: N pulse(s) = PN`.
@@ -68,10 +68,10 @@ Run these in order on the assembled kiosk. Each step says what must happen. If o
 - [ ] Phones: an Android and an iPhone both read a test ID from a photo, in normal light and in a dim spot.
 - [ ] Code left unused for 2 min → `TIME RAN OUT / PRESS TO RETRY`. A wrong code on the phone → "That code is wrong or has expired".
 - [ ] Pi's internet unplugged (Wi-Fi/hotspot still on) → borrowing with a phone still works.
-- [ ] Borrow: send the ID → `PUSH BLUE BUTTON` → blue → name and price → coins → the locker unlocks → take the calculator → `CLOSE THE DOOR / PUSH RED BUTTON` → close it, press red → it locks → `RENTAL SUCCESS / DUE AT …`.
+- [ ] Borrow: send the ID → `PUSH BLUE BUTTON` → blue → name and price → coins → `LOCKER 1 OPEN / LOCKS IN 10 SEC` → take the calculator and shut the door before 0 → press red → `RENTAL SUCCESS / DUE AT …`.
 - [ ] The locker is really locked afterwards (pull the door).
 - [ ] Return on time: send the ID → that locker unlocks → put it back → red → `RETURN SUCCESS`, locked.
-- [ ] Wrong calculator into the wrong locker → `WRONG CALCULATOR`, and the locker stays unlocked until fixed.
+- [ ] Wrong calculator into the wrong locker → `WRONG CALCULATOR`; blue opens the lock again so it can be fixed.
 - [ ] Red pressed with nothing inside → `CALCULATOR NOT DETECTED`.
 - [ ] Payment timeout (insert nothing for 2 min) → `PAYMENT TIMEOUT`, no locker opens.
 - [ ] Red never pressed → after the timeout the locker locks by itself and shows `DOOR LEFT OPEN`.

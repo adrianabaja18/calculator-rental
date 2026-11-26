@@ -72,7 +72,7 @@ Flyback diode (1N4007/1N5408) across EACH solenoid: stripe (cathode) to the + si
 ```
 - **NO** (normally open) means the lock is energised (unlocked) only while the relay is ON.
 - The kiosk keeps the relay ON from payment until the student presses the **red** button. The longest it can stay ON is the **removal timeout** when borrowing or the **return timeout** when returning (dashboard **Settings**, default 60 s and 90 s). The Python bridge turns the relay off at that limit by itself, even if the kiosk program crashes.
-- ⚠️ **Heat check:** many cheap 12 V solenoid locks are rated for only about 10 s ON at a time. During bring-up, hold a lock open for 60 s with `unlock 1` (set `LOCK_PULSE_MS=60000` temporarily), then touch it. If it's too hot to hold, **lower both timeouts in Settings** (minimum 15 s).
+- **Heat:** many cheap 12 V solenoid locks are rated for only about 10 s ON at a time, so the kiosk never powers one longer than **10 s** (`SOLENOID_MAX_ON_MS`). The doors have no latch, so the student takes or returns the calculator and shuts the door in that time while the LCD counts down (`LOCKS IN 10 SEC`) and the buzzer ticks; when the power drops the bolt locks the shut door. That locker's **BLUE** gives another 10 s (after a 5 s rest).
 - **3.3 V trigger check:**
   1. Power up and run `npm run hwcheck:pi`.
   2. At rest, both relay LEDs must be **off**.
@@ -147,11 +147,10 @@ BLUE 2 (Locker 2):  COM ── Pi GND    NO ③ ── GPIO 25 (pin 22)    NC �
 |---|---|---|
 | Idle | `SCAN STUDENT ID` / `1:READY 2:N/A` | — |
 | After a valid scan (borrow) | `PUSH BLUE BUTTON` / `1:READY 2:N/A` | **Blue** of a READY locker (30 s). A locker that isn't READY shows `LOCKER 2 N/A`; pick the other one. |
-| Locker unlocked, calculator inside | `LOCKER 1 OPEN` / `TAKE CALCULATOR` | Red is ignored until the calculator is out |
-| Calculator taken | `CLOSE THE DOOR` / `PUSH RED BUTTON` | **Red** of that locker → locks → `RENTAL SUCCESS` |
-| Return: locker unlocked | `RETURN CALC #1` / `TO LOCKER 1` | — |
-| Right calculator placed | `CLOSE THE DOOR` / `PUSH RED BUTTON` | **Red** → RFID checked → locks → `RETURN SUCCESS` |
-| Wrong or no calculator when red is pressed | `WRONG CALCULATOR` or `CALCULATOR NOT DETECTED` | The locker **stays unlocked**; fix it and press red again |
+| Locker unlocked (borrow or return) | `LOCKER 1 OPEN` / `LOCKS IN 10 SEC`, buzzer ticking | Red is ignored until the calculator is out |
+| Calculator taken / right one placed | `CLOSE THE DOOR` / `LOCKS IN n SEC` | **Red** → locks → `RENTAL SUCCESS` / `RETURN SUCCESS` (return: RFID checked) |
+| Countdown over | `TAKE CALCULATOR`, `CLOSED? PUSH RED` or `RETURN CALC #1` / `OPEN AGAIN: BLUE` | **Blue** of that locker → another 10 s; **red** finishes |
+| Wrong or no calculator when red is pressed | `WRONG CALCULATOR` or `CALCULATOR NOT DETECTED` | Refused; fix it (blue opens the lock again) and press red again |
 | Red never pressed | `DOOR LEFT OPEN` / `SEE AN OFFICER` | Locks at the timeout. A borrow stays active; a return with the right calculator inside still completes. A warning is logged. |
 
 ## 4. Power

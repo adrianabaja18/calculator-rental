@@ -65,7 +65,7 @@ export interface DisplayController {
   setBacklight(on: boolean): Promise<void>;
 }
 
-export type BeepPattern = 'ok' | 'error' | 'attention';
+export type BeepPattern = 'ok' | 'error' | 'attention' | 'tick'; // tick = one short click per countdown second
 
 export interface BuzzerController {
   beep(pattern: BeepPattern): Promise<void>;

@@ -12,7 +12,7 @@ Protocol: one JSON object per line.
     {"id":2,"cmd":"unlock","channel":1,"ms":60000}    relay ON (solenoid unlocked) for up to ms
     {"id":7,"cmd":"lock","channel":1}                 relay OFF now (red button pressed)
     {"id":3,"cmd":"lcd","lines":["SYSTEM READY","SCAN STUDENT ID"]}
-    {"id":4,"cmd":"beep","pattern":"ok"|"error"|"attention"}
+    {"id":4,"cmd":"beep","pattern":"ok"|"error"|"attention"|"tick"}
     {"id":5,"cmd":"read_rfid","channel":1}
     {"id":6,"cmd":"door","channel":1}
     {"id":8,"cmd":"backlight","on":false}             power saving: LCD backlight off/on
@@ -438,7 +438,7 @@ class RealHardware:
     def beep(self, pattern):
         if not self.buzzer:
             return
-        on, off, n = {"ok": (0.08, 0.05, 1), "error": (0.12, 0.08, 3), "attention": (0.2, 0.1, 2)}.get(pattern, (0.08, 0.05, 1))
+        on, off, n = {"ok": (0.08, 0.05, 1), "error": (0.12, 0.08, 3), "attention": (0.2, 0.1, 2), "tick": (0.03, 0.02, 1)}.get(pattern, (0.08, 0.05, 1))
         self.buzzer.beep(on_time=on, off_time=off, n=n, background=True)
 
     def read_rfid(self, channel):

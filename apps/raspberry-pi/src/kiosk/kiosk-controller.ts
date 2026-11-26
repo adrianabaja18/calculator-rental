@@ -20,7 +20,7 @@ import type { CoinInput, PaymentService } from '../payment/payment-service';
 import type { RentalService } from '../rental/rental-service';
 import type { ReturnService } from '../rental/return-service';
 import { KioskState, canMove } from './kiosk-states';
-import { LCD, errorScreen, lockerStatusLine, type LcdScreen } from './lcd';
+import { LCD, calcNumber, errorScreen, lockerStatusLine, type LcdScreen } from './lcd';
 
 /**
  * The kiosk's brain (spec §21): turns hardware events into rental steps.
@@ -33,9 +33,13 @@ import { LCD, errorScreen, lockerStatusLine, type LcdScreen } from './lcd';
  *   handleButton(kind, ch)     front panel: blue = choose locker ch, red = "door ch closed"
  *   tick()                     every ~250 ms: timeouts, RFID polling, overdue marking
  *
- * Lockers: a locker stays UNLOCKED from payment until the student presses its
- * red button (or the removal/return timeout ends), then it locks. The bridge
- * itself releases the solenoid at that limit, so a crash never leaves it open.
+ * Lockers: after payment the solenoid is powered for SOLENOID_MAX_ON_MS (10 s,
+ * so it can't overheat) while the LCD counts down and the buzzer ticks. The
+ * doors have no latch, so the student opens, takes/returns and shuts the door
+ * in that time; when the power drops the bolt locks the shut door. Too slow?
+ * That locker's BLUE button powers it for another 10 s. RED finishes. The
+ * bridge itself releases the solenoid at the limit, so a crash never leaves it
+ * powered.
  *
  * Business rules live in the services; this class only sequences them,
  * drives the hardware and the 16×2 LCD.
@@ -92,10 +96,33 @@ interface Flow {
   noticeUntil?: number;
   /** Set once the calculator is taken, while waiting for the red button. */
   dueAt?: string;
+  /** While the solenoid is powered: when it drops. */
+  lockOnUntil?: number;
+  /** When the solenoid last dropped (BLUE waits SOLENOID_REST_MS after this). */
+  lockOffAt?: number;
+  /** Last countdown second the buzzer ticked for. */
+  tickedSecond?: number;
 }
 
+/**
+ * Longest the solenoid is powered in one go. Cabinet solenoid locks are made for short pulses and
+ * overheat if held on. The removal/return timeouts in Settings still decide how long the kiosk
+ * waits for the student; BLUE re-powers the lock, after a short rest so it can cool.
+ */
+export const SOLENOID_MAX_ON_MS = 10_000;
+export const SOLENOID_REST_MS = 5_000;
 /** How long an officer's emergency unlock keeps the solenoid open. */
-export const OFFICER_UNLOCK_MS = 10_000;
+export const OFFICER_UNLOCK_MS = SOLENOID_MAX_ON_MS;
+
+/** States where the student is at an open (or re-openable) locker. */
+const LOCK_STATES: ReadonlySet<KioskState> = new Set([
+  KioskState.WAITING_FOR_REMOVAL,
+  KioskState.WAITING_FOR_DOOR_CLOSE,
+  KioskState.WAITING_FOR_RETURN,
+]);
+
+/** Calculator out (or back in): shut the door while the lock is still powered, then RED. */
+const doneScreen = (secondsLeft: number) => (secondsLeft ? LCD.lockOpen('CLOSE THE DOOR', secondsLeft) : LCD.lockClosed('CLOSED? PUSH RED'));
 
 interface SensorSnapshot {
   rfidState: RfidState;
@@ -299,6 +326,7 @@ export class KioskController {
 
   /** Borrow step 2: blue button → reserve that locker and ask for payment. */
   private async onSelect(channel: number) {
+    if (this.flow?.channel === channel && LOCK_STATES.has(this.state)) return this.reopen(this.flow);
     if (this.state !== KioskState.SELECTING_LOCKER || !this.selection) return;
     const locker = this.store.listLockerHardware().find((l) => l.channel === channel);
     if (!locker) return;
@@ -383,16 +411,16 @@ export class KioskController {
     this.move(KioskState.OPENING_LOCKER);
     const dispensing = this.services.rentals.startDispensing(flow.rentalId);
     if (!dispensing.ok) throw new Error(dispensing.message);
-    const holdMs = this.settings().removalTimeoutSeconds * 1000;
+    const now = this.now().getTime();
     try {
-      await this.hw.lockers.unlock(flow.channel, holdMs);
+      await this.openLock(flow, now);
     } catch (error) {
       this.services.rentals.failDispensing(flow.rentalId, 'LOCKER_OPEN_FAILED');
       throw error;
     }
-    flow.deadline = this.now().getTime() + holdMs;
+    flow.deadline = now + this.settings().removalTimeoutSeconds * 1000;
     this.move(KioskState.WAITING_FOR_REMOVAL);
-    await this.show(LCD.lockerOpen(flow.lockerNumber));
+    await this.show(LCD.lockOpen(`LOCKER ${flow.lockerNumber} OPEN`, SOLENOID_MAX_ON_MS / 1000));
   }
 
   private async openForReturn() {
@@ -400,11 +428,48 @@ export class KioskController {
     this.move(KioskState.RETURN_OPENING_LOCKER);
     const opened = this.services.returns.openReturnLocker(flow.rentalId);
     if (!opened.ok) throw new Error(opened.message);
-    const holdMs = this.settings().returnTimeoutSeconds * 1000;
-    await this.hw.lockers.unlock(flow.channel, holdMs);
-    flow.deadline = this.now().getTime() + holdMs;
+    const now = this.now().getTime();
+    await this.openLock(flow, now);
+    flow.deadline = now + this.settings().returnTimeoutSeconds * 1000;
     this.move(KioskState.WAITING_FOR_RETURN);
-    await this.show(LCD.returnTo(flow.calculatorCode, flow.lockerNumber));
+    await this.show(LCD.lockOpen(`LOCKER ${flow.lockerNumber} OPEN`, SOLENOID_MAX_ON_MS / 1000));
+  }
+
+  /** Power the lock for SOLENOID_MAX_ON_MS; the tick counts it down on the LCD and buzzer. */
+  private async openLock(flow: Flow, now: number) {
+    await this.hw.lockers.unlock(flow.channel, SOLENOID_MAX_ON_MS);
+    flow.lockOnUntil = now + SOLENOID_MAX_ON_MS;
+    flow.tickedSecond = undefined;
+  }
+
+  private async lockNow(flow: Flow, now: number) {
+    if (flow.lockOnUntil !== undefined) flow.lockOffAt = now;
+    flow.lockOnUntil = undefined;
+    await this.hw.lockers.lock(flow.channel);
+  }
+
+  /** Seconds of lock power left (0 = locked). Ticks the buzzer once a second and drops the lock at 0. */
+  private async lockCountdown(flow: Flow, now: number): Promise<number> {
+    if (flow.lockOnUntil === undefined) return 0;
+    if (now >= flow.lockOnUntil) {
+      await this.lockNow(flow, now); // the bridge already dropped it; this keeps both in step
+      return 0;
+    }
+    const left = Math.ceil((flow.lockOnUntil - now) / 1000);
+    if (left !== flow.tickedSecond) {
+      flow.tickedSecond = left;
+      await this.hw.buzzer.beep('tick');
+    }
+    return left;
+  }
+
+  /** BLUE of the locker in use: power the lock for another 10 s (after a short rest). */
+  private async reopen(flow: Flow) {
+    const now = this.now().getTime();
+    if (flow.lockOnUntil !== undefined) return; // already open
+    if (flow.lockOffAt !== undefined && now - flow.lockOffAt < SOLENOID_REST_MS) return this.hw.buzzer.beep('error');
+    await this.openLock(flow, now);
+    await this.hw.buzzer.beep('ok');
   }
 
   /** Red button: "I closed the door". Only the locker in use reacts. */
@@ -414,14 +479,14 @@ export class KioskController {
     const now = this.now().getTime();
 
     if (this.state === KioskState.WAITING_FOR_REMOVAL) {
-      // The calculator is still inside: the locker stays open until it is taken.
+      // The calculator is still inside: not done yet.
       await this.hw.buzzer.beep('error');
       return;
     }
 
     if (this.state === KioskState.WAITING_FOR_DOOR_CLOSE) {
       if ((await this.hw.lockers.doorState(flow.channel)) === DoorState.OPEN) return this.notice(LCD.closeDoor()); // optional door sensor
-      await this.hw.lockers.lock(flow.channel);
+      await this.lockNow(flow, now);
       return this.rentalSuccess(now, flow.dueAt!);
     }
 
@@ -430,14 +495,14 @@ export class KioskController {
       const door = await this.hw.lockers.doorState(flow.channel);
       const result = this.services.returns.verifyReturn(flow.rentalId, { detectedRfidUid: reading.uid, doorState: door });
       if (result.ok) {
-        await this.hw.lockers.lock(flow.channel);
+        await this.lockNow(flow, now);
         this.move(KioskState.RETURN_COMPLETE);
         this.holdUntil = now + this.messageMs;
         await this.hw.buzzer.beep('ok');
         await this.show(LCD.returnSuccess(result.penaltyPaidCentavos));
         return;
       }
-      // Not accepted: the locker stays unlocked so the student can fix it.
+      // Not accepted: the student fixes it (BLUE opens the lock again).
       return this.notice(result.code === ErrorCode.RFID_MISMATCH ? LCD.wrongCalculator(flow.calculatorCode) : errorScreen(result.code));
     }
   }
@@ -544,6 +609,7 @@ export class KioskController {
 
   private async checkRemoval(now: number) {
     const flow = this.flow!;
+    const left = await this.lockCountdown(flow, now);
     const reading = await this.hw.rfid.read(flow.channel);
     if (reading.readerOk && reading.uid !== flow.expectedUid) {
       // The rental is ACTIVE from this moment (the calculator is out); the locker locks on the red button.
@@ -552,22 +618,25 @@ export class KioskController {
         flow.dueAt = removed.dueAt;
         this.move(KioskState.WAITING_FOR_DOOR_CLOSE);
         await this.hw.buzzer.beep('ok');
-        await this.show(LCD.closeAndPressRed());
+        await this.show(doneScreen(left));
         return;
       }
     }
     if (now > flow.deadline) {
-      await this.hw.lockers.lock(flow.channel);
+      await this.lockNow(flow, now);
       this.services.rentals.failDispensing(flow.rentalId, 'CALCULATOR_NOT_REMOVED');
       await this.message(LCD.removalTimeout(), 'error');
+      return;
     }
+    await this.show(left ? LCD.lockOpen(`LOCKER ${flow.lockerNumber} OPEN`, left) : LCD.lockClosed('TAKE CALCULATOR'));
   }
 
   private async checkDoorTimeout(now: number) {
     const flow = this.flow!;
-    if (flow.noticeUntil === undefined || now >= flow.noticeUntil) await this.show(LCD.closeAndPressRed());
+    const left = await this.lockCountdown(flow, now);
+    if (flow.noticeUntil === undefined || now >= flow.noticeUntil) await this.show(doneScreen(left));
     if (now <= flow.deadline) return;
-    await this.hw.lockers.lock(flow.channel);
+    await this.lockNow(flow, now);
     this.log('warn', 'Red button not pressed after a rental; locker locked at the timeout', { rentalId: flow.rentalId, locker: flow.lockerNumber });
     await this.message(LCD.doorLeftOpen(), 'attention');
   }
@@ -575,11 +644,12 @@ export class KioskController {
   /** Live hints while the student puts the calculator back; the red button decides. */
   private async checkReturn(now: number) {
     const flow = this.flow!;
+    const left = await this.lockCountdown(flow, now);
     const reading = await this.hw.rfid.read(flow.channel);
     const rightOne = reading.readerOk && reading.uid !== null && reading.uid === flow.expectedUid;
 
     if (now > flow.deadline) {
-      await this.hw.lockers.lock(flow.channel);
+      await this.lockNow(flow, now);
       if (rightOne) {
         // The right calculator is back but the red button was never pressed. Don't cancel the
         // return (the student would keep being charged): complete it and tell an officer.
@@ -599,9 +669,10 @@ export class KioskController {
     }
 
     if (flow.noticeUntil !== undefined && now < flow.noticeUntil) return;
-    if (!reading.readerOk || reading.uid === null) await this.show(LCD.returnTo(flow.calculatorCode, flow.lockerNumber));
-    else if (rightOne) await this.show(LCD.closeAndPressRed());
-    else await this.show(LCD.wrongCalculator(flow.calculatorCode));
+    if (rightOne) return this.show(doneScreen(left));
+    const what = reading.readerOk && reading.uid !== null ? 'WRONG CALCULATOR'
+      : left ? `LOCKER ${flow.lockerNumber} OPEN` : `RETURN CALC #${calcNumber(flow.calculatorCode)}`;
+    await this.show(left ? LCD.lockOpen(what, left) : LCD.lockClosed(what));
   }
 
   // ------------------------------------------------------------------ sensors
