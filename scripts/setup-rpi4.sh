@@ -82,7 +82,7 @@ echo "[5/7] Preparing .env files & bootstrapping local SQLite database..."
 if [[ ! -f "${REPO_DIR}/apps/raspberry-pi/.env" ]]; then
   cp "${REPO_DIR}/apps/raspberry-pi/.env.example" "${REPO_DIR}/apps/raspberry-pi/.env"
   sed -i 's/^HARDWARE_MODE=.*/HARDWARE_MODE=real/' "${REPO_DIR}/apps/raspberry-pi/.env"
-  sed -i 's/^QR_SCANNER=.*/QR_SCANNER=serial/' "${REPO_DIR}/apps/raspberry-pi/.env"
+  sed -i 's/^QR_SCANNER=.*/QR_SCANNER=phone/' "${REPO_DIR}/apps/raspberry-pi/.env"
   sed -i 's/^LOG_PRETTY=.*/LOG_PRETTY=false/' "${REPO_DIR}/apps/raspberry-pi/.env"
   echo "  Created apps/raspberry-pi/.env (configured for real Pi hardware + cloud sync to https://calculator-rental.vercel.app)"
 else
