@@ -97,7 +97,9 @@ Do this once the Pi runs the web app (Stage 2 and [raspberry-pi-local-setup.md](
 1. From a phone or laptop **on the kiosk network**, open the dashboard at the Pi's address (e.g. `http://192.168.1.50:3000`) and sign in.
 2. **Devices** → **Student scan page** → **Download the QR (SVG)**. Print it about 5 × 5 cm and stick it next to the LCD with a line like "Scan to send your ID". If the card shows a yellow warning, you opened the dashboard as `localhost`: use the Pi's address, or set `SCAN_PAGE_URL` in `apps/web/.env.local`.
 3. Give the Pi a **fixed address** on the portable Wi-Fi, or the sticker stops working when the address changes. In the portable router's admin page (usually printed on its label, e.g. `192.168.0.1` or `192.168.8.1`), find **DHCP reservation / Address reservation / Static IP**, pick the Pi (hostname `raspberrypi`, or match its MAC from `ip link show wlan0`), and reserve its current address. Reboot the Pi and check `hostname -I` still shows it.
-   Also write the Wi-Fi **name** on the sticker (e.g. "Join CPE-KIOSK, then scan"), and keep the router's Wi-Fi password simple or open, since every student must join it.
+   Put up **two QR signs** beside the kiosk, as in the renter guide:
+   - **STEP 1: Wi-Fi QR** (the team provides it). Phones join the Wi-Fi by scanning it. Its text is `WIFI:T:WPA;S:<wifi name>;P:<password>;;` (for an open network: `WIFI:T:nopass;S:<wifi name>;;`); many portable routers' apps can show it. Reprint it if the Wi-Fi name or password changes.
+   - **STEP 2: scan-page QR** from **Devices → Student scan page** (this step).
 4. Test with at least one **Android** and one **iPhone**: scan the sticker → the page opens → **Take or upload a photo** of a test ID → the name appears. Try a dim spot and a slightly dirty ID too.
 5. Students use **Take or upload a photo** (it opens the phone's normal camera app). The live-camera button is hidden on the Pi's `http://` address because phones only allow it on https (team decision: photo only).
 

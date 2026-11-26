@@ -197,7 +197,7 @@ export default async function DeviceStatusPage() {
             <div className="h-40 w-40 shrink-0" dangerouslySetInnerHTML={{ __html: scan.svg }} />
             <div className="max-w-md text-sm text-slate-700">
               <p>
-                Print this QR and stick it next to the kiosk LCD. Students on the kiosk Wi-Fi scan it to open{' '}
+                Print this QR, label it <strong>STEP 2</strong>, and stick it next to the kiosk LCD beside the STEP 1 Wi-Fi QR. Students on the kiosk Wi-Fi scan it to open{' '}
                 <span className="font-mono text-slate-900">{scan.url}</span> and send their school ID.
               </p>
               {scan.isLocalhost && (
