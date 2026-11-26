@@ -183,7 +183,7 @@ The kiosk has no camera. Because the web app runs **on the Pi** with the same SQ
 
 All three functions live in `packages/shared/src/sqlite-node.ts`, so the kiosk and the web app use the same rules.
 
-Security: the code proves physical presence (only the LCD shows it); it is single-use and short-lived. Wrong codes are counted per phone (SHA-256 of its address with a per-Pi random salt; no addresses stored): 10 in 10 minutes → refused. The photo never leaves the phone; the QR text is **stored** in `scan_sessions` (team decision 2026-11-28) with when it was sent and whether the kiosk used it. The online (cloud) dashboard refuses `/api/scan`: scanning only happens on the Pi.
+Security: the code proves physical presence (only the LCD shows it); it is single-use and short-lived. Wrong codes are counted per phone (SHA-256 of its address with a per-Pi random salt; no addresses stored): 10 in 10 minutes → refused. The photo never leaves the phone; the QR text is **stored** in `scan_sessions` (team decision 2026-11-28) with when it was sent and whether the kiosk used it, listed on the dashboard's **ID Scans** page. The online (cloud) dashboard refuses `/api/scan`: scanning only happens on the Pi.
 
 Limit: phones only allow the **live** camera view on https. Over the Pi's plain `http://` address, **Take or upload a photo** works (it opens the phone's own camera app).
 

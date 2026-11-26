@@ -28,9 +28,12 @@ export async function GET() {
   ).t;
   const lockerStamp = (db.prepare('SELECT COALESCE(MAX(updated_at), \'\') AS t FROM lockers').get() as { t: string }).t;
   const beat = getLocalConfig(db, 'kiosk_heartbeat') ?? '';
+  const scanStamp = (
+    db.prepare(`SELECT COALESCE(MAX(COALESCE(consumed_at, submitted_at, created_at)), '') AS t FROM scan_sessions`).get() as { t: string }
+  ).t;
 
   return NextResponse.json(
-    { token: `${maxSeq}:${cmdStamp}:${lockerStamp}:${beat.length}:${beat.slice(0, 48)}` },
+    { token: `${maxSeq}:${cmdStamp}:${lockerStamp}:${scanStamp}:${beat.length}:${beat.slice(0, 48)}` },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }

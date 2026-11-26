@@ -195,6 +195,7 @@ kiosk checks SQLite every 0.5 s ─▶ gets the ID text once ─▶ the normal b
 | `apps/web/src/app/api/scan/route.ts` | phone: POST `{code, qr}` (public, rate-limited; local mode only) |
 | `apps/web/src/app/scan/` | the phone page (`/scan`, no login): camera with light toggle, photo upload, code entry |
 | `apps/web/src/proxy.ts` | `/scan` skips the login redirect |
+| **ID Scans** page (`/scans`, System menu, Pi only) | every ID sent from a phone: student, course, when, and whether the kiosk used it. Filters: used / sent but not used / codes with no ID; search by name or number. |
 | Devices page | **Student scan page** card: printable QR sticker of the Pi's `/scan` link (or `SCAN_PAGE_URL`) |
 | `apps/raspberry-pi/src/kiosk/` | new state `WAITING_FOR_PHONE`; LCD `PRESS TO START`, `SCAN ID ON PHONE / CODE …`, `TIME RAN OUT`; asleep, the press wakes it **and** shows a code |
 | `.env` | `QR_SCANNER=phone` (new default in `.env.example`); `mock` and `serial` still work for testing |
@@ -209,6 +210,7 @@ kiosk checks SQLite every 0.5 s ─▶ gets the ID text once ─▶ the normal b
 - [ ] Phones on the kiosk network open the sticker link; **Take or upload a photo** of a test ID shows the right name (Android and iPhone).
 - [ ] Kiosk: a button → code on the LCD counting down → send from the phone → `PUSH BLUE BUTTON` within ~1 s.
 - [ ] Wrong code on the phone → "That code is wrong or has expired". Code left for 2 min → `TIME RAN OUT`.
+- [ ] **ID Scans** lists each sent ID within a few seconds, marked *Used by kiosk*.
 - [ ] Unplug the Pi's internet (keep the Wi-Fi/hotspot): borrowing with a phone still works.
 
 ### Known limits
