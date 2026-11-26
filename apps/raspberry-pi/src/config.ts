@@ -62,7 +62,7 @@ const ConfigSchema = z.object({
   I2C_BUS: z.coerce.number().int().min(0).max(10).default(1),
   LCD_I2C_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{2}$/).default('0x27'),
   DOOR_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default(''),
-  SELECT_BUTTON_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('24,25'),
+  SELECT_BUTTON_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('27,25'), // blue buttons: Locker 1 = GPIO 27, Locker 2 = GPIO 25
   CLOSE_BUTTON_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('22,23'),
   POWER_SAVE: booleanTrue,
   SLEEP_AFTER_SECONDS: z.coerce.number().int().min(15).max(3600).default(120),

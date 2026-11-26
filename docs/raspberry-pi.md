@@ -21,7 +21,7 @@ The software side is `apps/raspberry-pi` (Node.js kiosk) and `apps/raspberry-pi/
 | ESP32-CAM + OV2640 on USB-C base | 1 | Pi USB port (`/dev/ttyUSB0`) |
 | 12 V adapter (≥ 3 A) | 1 | solenoids + coin selector |
 | 5.1 V / 3 A USB-C supply | 1 | Raspberry Pi |
-| Arcade push button (Yenox microswitch), **blue**, one per locker: "choose this locker" | 2 | GPIO 24, GPIO 25 |
+| Arcade push button (Yenox microswitch), **blue**, one per locker: "choose this locker" | 2 | GPIO 27, GPIO 25 |
 | Arcade push button (Yenox microswitch), **red**, one per locker: "I closed the door" | 2 | GPIO 22, GPIO 23 |
 
 **Not fitted (decided 2026-11-19):**
@@ -47,7 +47,7 @@ The software side is `apps/raspberry-pi` (Node.js kiosk) and `apps/raspberry-pi/
 | RC522 #2 SDA/SS → Locker 2 | GPIO 7 (CE1) | 26 | |
 | RED button → Locker 1 | GPIO 22 | 15 | `CLOSE_BUTTON_PINS=22,23` |
 | RED button → Locker 2 | GPIO 23 | 16 | |
-| BLUE button → Locker 1 | GPIO 24 | 18 | `SELECT_BUTTON_PINS=24,25` |
+| BLUE button → Locker 1 | GPIO 27 | 13 | `SELECT_BUTTON_PINS=27,25` |
 | BLUE button → Locker 2 | GPIO 25 | 22 | |
 | RC522 #1 RST | GPIO 4 | 7 | `RFID_RST_PINS=4,16` (held HIGH by the bridge) |
 | RC522 #2 RST | GPIO 16 | 36 | |
@@ -135,7 +135,7 @@ Each button's microswitch has three tabs: **COM ①**, **NC ②** (top) and **NO
 ```
 RED 1  (Locker 1):  COM ── Pi GND    NO ③ ── GPIO 22 (pin 15)    NC ② ── not connected
 RED 2  (Locker 2):  COM ── Pi GND    NO ③ ── GPIO 23 (pin 16)    NC ② ── not connected
-BLUE 1 (Locker 1):  COM ── Pi GND    NO ③ ── GPIO 24 (pin 18)    NC ② ── not connected
+BLUE 1 (Locker 1):  COM ── Pi GND    NO ③ ── GPIO 27 (pin 13)    NC ② ── not connected
 BLUE 2 (Locker 2):  COM ── Pi GND    NO ③ ── GPIO 25 (pin 22)    NC ② ── not connected
 ```
 - No resistors: the Pi's internal pull-ups are used. All four COM wires can share one GND pin (pin 14 or 20 is closest).

@@ -52,7 +52,7 @@ The simulator uses its own database (`apps/raspberry-pi/data/simulator.db`), nev
 Run these in order on the assembled kiosk. Each step says what must happen. If one fails, stop and fix it before continuing (see [raspberry-pi.md](raspberry-pi.md) troubleshooting).
 
 ### 3.1 Parts, one at a time (`npm run hwcheck:pi`)
-- [ ] Startup lists the devices found. The pins line shows `RST 4,16` and the buttons `blue 24,25, red 22,23`.
+- [ ] Startup lists the devices found. The pins line shows `RST 4,16` and the buttons `blue 27,25, red 22,23`.
 - [ ] `lcd HELLO` shows on the LCD (adjust contrast if blank).
 - [ ] `beep ok` / `beep error` sound.
 - [ ] `unlock 1` / `unlock 2`: that relay clicks, the solenoid pulls, and it releases after 3 s. At rest both relay LEDs are off.
