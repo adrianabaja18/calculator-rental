@@ -8,7 +8,7 @@ import { createMockHardware, type MockHardware } from '../hardware/mock';
 import { PaymentService } from '../payment/payment-service';
 import { RentalService } from '../rental/rental-service';
 import { ReturnService } from '../rental/return-service';
-import { KioskController, SOLENOID_MAX_ON_MS, type PhoneScan } from './kiosk-controller';
+import { KioskController, SOLENOID_MAX_ON_MS, SOLENOID_REST_MS, type PhoneScan } from './kiosk-controller';
 import { KioskState, canMove } from './kiosk-states';
 
 // Fake identities only.
@@ -130,17 +130,16 @@ describe('borrowing (spec §5, blue/red buttons)', () => {
     expect(hw.coins.enabled).toBe(false);
     expect(hw.lockers.unlocks).toEqual([{ channel: 2, maxMs: SOLENOID_MAX_ON_MS }]); // only Locker 2, 10 s at most (heat)
     expect([...hw.lockers.open]).toEqual([2]);
-    expect(lcd()).toEqual(['LOCKER 2 OPEN', 'TAKE CALCULATOR']);
+    expect(lcd()).toEqual(['LOCKER 2 OPEN', 'LOCKS IN 10 SEC']);
 
-    await red(2); // calculator still inside: the lock opens again for the student
+    await red(2); // calculator still inside: not done
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_REMOVAL);
     expect([...hw.lockers.open]).toEqual([2]);
-    expect(hw.lockers.unlocks).toHaveLength(2);
 
     hw.rfid.place(2, null); // student takes it
     await advance(SECOND);
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_DOOR_CLOSE);
-    expect(lcd()).toEqual(['CLOSE THE DOOR', 'PUSH RED BUTTON']);
+    expect(lcd()).toEqual(['CLOSE THE DOOR', 'LOCKS IN 9 SEC']);
     expect(rentalStatus()).toBe('ACTIVE'); // the calculator is out
 
     await red(1); // the other locker's button does nothing
@@ -258,6 +257,57 @@ describe('borrowing (spec §5, blue/red buttons)', () => {
   });
 });
 
+describe('10-second lock window (no door latch)', () => {
+  const ticks = () => hw.buzzer.beeps.filter((b) => b === 'tick').length;
+
+  it('counts down on the LCD with a buzzer tick each second, then drops the lock', async () => {
+    await kiosk.handleScan(JUAN);
+    await blue(1);
+    await coin(20);
+    expect(lcd()).toEqual(['LOCKER 1 OPEN', 'LOCKS IN 10 SEC']);
+    const before = ticks();
+    for (let s = 9; s >= 1; s--) {
+      await advance(SECOND);
+      expect(lcd()).toEqual(['LOCKER 1 OPEN', `LOCKS IN ${s} SEC`]);
+    }
+    expect(ticks() - before).toBe(9);
+    expect([...hw.lockers.open]).toEqual([1]);
+
+    await advance(SECOND); // 10 s: power off
+    expect(hw.lockers.open.size).toBe(0);
+    expect(lcd()).toEqual(['TAKE CALCULATOR', 'OPEN AGAIN: BLUE']);
+    expect(kiosk.state).toBe(KioskState.WAITING_FOR_REMOVAL);
+  });
+
+  it('too slow: BLUE opens it for another 10 s, after a short rest', async () => {
+    await kiosk.handleScan(JUAN);
+    await blue(1);
+    await coin(20);
+    hw.rfid.place(1, null); // took it, but didn't shut the door in time
+    await advance(SECOND);
+    await advance(SOLENOID_MAX_ON_MS);
+    expect(hw.lockers.open.size).toBe(0);
+    expect(lcd()).toEqual(['CLOSED? PUSH RED', 'OPEN AGAIN: BLUE']);
+
+    await blue(1); // the lock is still cooling down
+    expect(hw.lockers.open.size).toBe(0);
+    expect(hw.buzzer.beeps.at(-1)).toBe('error');
+
+    await advance(SOLENOID_REST_MS);
+    await blue(2); // the other locker's button does nothing
+    expect(hw.lockers.open.size).toBe(0);
+    await blue(1);
+    expect([...hw.lockers.open]).toEqual([1]);
+    expect(hw.lockers.unlocks.at(-1)).toEqual({ channel: 1, maxMs: SOLENOID_MAX_ON_MS });
+    await advance(SECOND);
+    expect(lcd()).toEqual(['CLOSE THE DOOR', 'LOCKS IN 9 SEC']);
+
+    await red(1); // shut: lock right away
+    expect(hw.lockers.open.size).toBe(0);
+    expect(kiosk.state).toBe(KioskState.RENTAL_ACTIVE);
+  });
+});
+
 describe('returning (spec §6, red button)', () => {
   it('on time: opens only the borrowed locker, then completes on the red button', async () => {
     const rentalId = await borrow();
@@ -267,11 +317,11 @@ describe('returning (spec §6, red button)', () => {
     await kiosk.handleScan(JUAN);
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_RETURN);
     expect(hw.lockers.unlocks).toEqual([{ channel: 1, maxMs: SOLENOID_MAX_ON_MS }]);
-    expect(lcd()).toEqual(['RETURN CALC #1', 'TO LOCKER 1']);
+    expect(lcd()).toEqual(['LOCKER 1 OPEN', 'LOCKS IN 10 SEC']);
 
     hw.rfid.place(1, DEV_RFID.calc1);
     await advance(SECOND);
-    expect(lcd()).toEqual(['CLOSE THE DOOR', 'PUSH RED BUTTON']);
+    expect(lcd()).toEqual(['CLOSE THE DOOR', 'LOCKS IN 9 SEC']);
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_RETURN);
 
     await red(1);
@@ -281,15 +331,13 @@ describe('returning (spec §6, red button)', () => {
     expect(hw.lockers.open.size).toBe(0);
   });
 
-  it('red button with nothing inside: refused, the lock opens again', async () => {
+  it('red button with nothing inside: refused, the lock keeps counting down', async () => {
     await borrow();
     await kiosk.handleScan(JUAN);
-    hw.lockers.unlocks.length = 0;
     await red(1);
     expect(lcd()).toEqual(['CALCULATOR', 'NOT DETECTED']);
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_RETURN);
     expect([...hw.lockers.open]).toEqual([1]);
-    expect(hw.lockers.unlocks).toEqual([{ channel: 1, maxMs: SOLENOID_MAX_ON_MS }]);
   });
 
   it('late: asks for the penalty first, then opens the locker', async () => {
@@ -326,14 +374,14 @@ describe('returning (spec §6, red button)', () => {
 
     hw.rfid.place(1, DEV_RFID.calc2);
     await advance(SECOND);
-    expect(lcd()).toEqual(['WRONG CALCULATOR', 'RETURN CALC #1']);
+    expect(lcd()).toEqual(['WRONG CALCULATOR', 'LOCKS IN 9 SEC']);
     await red(1);
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_RETURN);
     expect([...hw.lockers.open]).toEqual([1]); // never locked on the wrong one
 
     hw.rfid.place(1, DEV_RFID.calc1);
     await advance(4 * SECOND); // the refusal message times out, live hint returns
-    expect(lcd()).toEqual(['CLOSE THE DOOR', 'PUSH RED BUTTON']);
+    expect(lcd()).toEqual(['CLOSE THE DOOR', 'LOCKS IN 5 SEC']);
     await red(1);
     expect(kiosk.state).toBe(KioskState.RETURN_COMPLETE);
   });

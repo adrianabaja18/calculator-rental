@@ -22,11 +22,12 @@ describe('16x2 LCD screens', () => {
     expect(LCD.ready(status)).toEqual(screen('SCAN STUDENT ID', '1:READY 2:N/A'));
     expect(LCD.pickLocker(status)).toEqual(screen('PUSH BLUE BUTTON', '1:READY 2:N/A'));
     expect(LCD.lockerUnavailable(2, status)).toEqual(screen('LOCKER 2 N/A', '1:READY 2:N/A'));
-    expect(LCD.closeAndPressRed()).toEqual(screen('CLOSE THE DOOR', 'PUSH RED BUTTON'));
+    expect(LCD.lockOpen('CLOSE THE DOOR', 7)).toEqual(screen('CLOSE THE DOOR', 'LOCKS IN 7 SEC'));
+    expect(LCD.lockClosed('CLOSED? PUSH RED')).toEqual(screen('CLOSED? PUSH RED', 'OPEN AGAIN: BLUE'));
     expect(lockerStatusLine([{ number: 1, available: true }, { number: 2, available: true }]).length).toBeLessThanOrEqual(16);
     expect(LCD.quote('JUAN DELA CRUZ', 2000, 180)).toEqual(screen('JUAN DELA CRUZ', 'P20 / 3 HOURS'));
     expect(LCD.payment(500, 2000)).toEqual(screen('PAYMENT P5/P20', 'INSERT COINS'));
-    expect(LCD.lockerOpen(1)).toEqual(screen('LOCKER 1 OPEN', 'TAKE CALCULATOR'));
+    expect(LCD.lockOpen('LOCKER 1 OPEN', 10)).toEqual(screen('LOCKER 1 OPEN', 'LOCKS IN 10 SEC'));
     expect(LCD.rentalSuccess('2026-10-20T05:00:00.000Z', TUE_10AM)).toEqual(screen('RENTAL SUCCESS', 'DUE AT 01:00 PM'));
     expect(LCD.rentalSuccess('2026-10-20T04:00:00.000Z', TUE_10AM)[1].trimEnd()).toBe('DUE AT 12:00 PM'); // longest time still fits
     // Operating hours: rented Tue 3 PM → due Wed 10 AM; the weekday is shown.
@@ -37,7 +38,6 @@ describe('16x2 LCD screens', () => {
     expect(LCD.closedForBorrowing(new Date('2026-10-21T01:00:00.000Z'))).toEqual(screen('KIOSK CLOSED', 'OPEN WED 9:00AM'));
     expect(LCD.closedIdle(new Date('2026-10-21T02:30:00.000Z'))[1]).toBe('OPEN WED 10:30AM'); // longest still fits
     expect(LCD.penaltyDue(60, 1000)).toEqual(screen('LATE 1H00M', 'PAY PENALTY P10'));
-    expect(LCD.returnTo('CALC-002', 2)).toEqual(screen('RETURN CALC #2', 'TO LOCKER 2'));
     expect(LCD.wrongCalculator('CALC-002')).toEqual(screen('WRONG CALCULATOR', 'RETURN CALC #2'));
     expect(LCD.returnSuccess(0)).toEqual(screen('RETURN SUCCESS', 'THANK YOU'));
     expect(LCD.returnSuccess(1000)).toEqual(screen('RETURN SUCCESS', 'PENALTY: P10'));
@@ -50,14 +50,15 @@ describe('16x2 LCD screens', () => {
       LCD.ready('1:READY 2:N/A'),
       LCD.pickLocker('1:READY 2:N/A'),
       LCD.selectTimeout(),
-      LCD.closeAndPressRed(),
+      LCD.lockOpen('CLOSE THE DOOR', 10),
+      LCD.lockClosed('CLOSED? PUSH RED'),
       LCD.checking(),
       LCD.quote('MARIA CLARA DE LOS SANTOS', 2000, 180),
       LCD.payment(2000, 2000),
-      LCD.lockerOpen(12),
+      LCD.lockOpen('LOCKER 12 OPEN', 10),
       LCD.rentalSuccess('2026-10-20T04:00:00.000Z', TUE_10AM),
       LCD.penaltyDue(24 * 60 + 5, 16000),
-      LCD.returnTo('CALC-010', 10),
+      LCD.lockClosed('RETURN CALC #10'),
       LCD.wrongCalculator('CALC-010'),
       LCD.returnSuccess(16000),
       LCD.paymentTimeout(),

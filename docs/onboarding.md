@@ -73,7 +73,7 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 2 | LCD size | — | ✅ **16×2** (confirmed 2026-11-17); all messages fit 16 characters |
 | 3 | 3rd relay for the coin selector | — | ✅ **Not fitted** (idle coins are logged for refund) |
 | 4 | Front-panel buttons | — | ✅ **Blue + red arcade button per locker** (decided 2026-11-25). Blue chooses the locker (GPIO 27/25; Locker 1 moved from GPIO 24 to 27 on 2026-11-28); red = "door closed", which locks it (GPIO 22/23). No door sensors. |
-| 4b | Solenoid heat | Phase 11 bring-up | ✅ Fixed in software (2026-11-26): the solenoid is powered for **10 s at most** (`SOLENOID_MAX_ON_MS`), then the door latches when pushed shut. ⏳ Check on hardware: with the lock **unpowered**, push the door shut: it must latch by itself (slanted bolt). If it can't close while locked, tell the software lead. |
+| 4b | Solenoid heat | Phase 11 bring-up | ✅ Fixed in software (2026-11-26): the lock is powered for **10 s at most** (`SOLENOID_MAX_ON_MS`) while the LCD counts down (`LOCKS IN 10 SEC`) and the buzzer ticks. The doors have no latch, so the student shuts the door before 0 and the bolt locks it when the power drops. Too slow? That locker's **BLUE** gives another 10 s (after a 5 s rest). ⏳ Check on hardware that 10 s is enough to take a calculator and shut the door. |
 | 5 | Real **RFID UIDs** of the two calculator tags | Phase 12 | ✅ Tag A `FE-AC-31-03` → CALC-001 (Locker 1), tag B `57-99-3B-03` → CALC-002 (Locker 2). ⚠️ **Enter them on the dashboard** (Calculators → Edit) before running the kiosk with sync, or the dashboard's fake seed UIDs replace them on the kiosk. |
 | 6b | ~~ESP32-CAM firmware 1.1.0~~ | — | ✅ **Not needed**: the ESP32-CAM is replaced by phone scanning (decided 2026-11-28). |
 | 6c | **Phones must reach the Pi** | Physical build | ✅ The kiosk uses the **team's portable Wi-Fi**; students join it to open `/scan`. Reserve the Pi's address on that router. **Photo upload only** (decided 2026-11-28): no https on the Pi, so the live-camera button is hidden. |
@@ -392,10 +392,10 @@ The team built a front panel: `[BLUE 1] [RED 1]  [LCD]  [BLUE 2] [RED 2]`. Wirin
 - **Borrow:**
   - The student scans their ID. A blocked or ineligible student is refused right away (`RentalService.checkRental`, read-only).
   - New state `SELECTING_LOCKER`: the student presses the **blue** button of a READY locker within 30 s. `startRental(qr, lockerNumber)` reserves exactly that locker.
-  - They pay, then the lock opens for **10 s** (so the solenoid can't overheat). They pull the door open, take the calculator, and the LCD shows `CLOSE THE DOOR` / `PUSH RED BUTTON`. The door latches when pushed shut; **red** confirms and shows RENTAL SUCCESS. Red pressed with the calculator still inside opens the lock again.
+  - They pay, then the lock opens for **10 s** (so the solenoid can't overheat): `LOCKER 1 OPEN` / `LOCKS IN 10 SEC`, counting down with a buzzer tick each second. They take the calculator and shut the door before 0 (`CLOSE THE DOOR` once it's out). **Red** locks right away and shows RENTAL SUCCESS. After 0 the LCD shows `CLOSED? PUSH RED` / `OPEN AGAIN: BLUE`: **blue** of that locker powers the lock for another 10 s.
 - **Return:**
-  - The lock opens for 10 s. The LCD gives live hints from the RFID reader (return-to, wrong calculator, or close and push red).
-  - **Red** checks the RFID. The right calculator → locks → RETURN SUCCESS. Wrong or missing → the lock opens again for 10 s so the student can fix it.
+  - The lock opens for 10 s with the same countdown. The LCD gives live hints from the RFID reader (locker open, wrong calculator, or close the door).
+  - **Red** checks the RFID. The right calculator → locks → RETURN SUCCESS. Wrong or missing → refused; the student fixes it (blue opens the lock again).
 - **Locks:**
   - `LockerController.unlock(channel, maxMs)` holds the relay, and the new `lock(channel)` releases it.
   - The bridge turns the relay off at `maxMs` (the removal or return timeout) even if Node dies. Every timeout and crash path locks.
@@ -548,7 +548,7 @@ Delivered as **three PRs**:
   2. `coin 20`: shows LOCKER 1 OPEN
   3. `take 1`: shows RENTAL SUCCESS / DUE AT …
   4. `wait 240`, then `juan`: shows LATE 1H00M / PAY PENALTY P10
-  5. `coin 10`: shows RETURN CALC #1 / TO LOCKER 1
+  5. `coin 10`: shows LOCKER 1 OPEN / LOCKS IN 10 SEC
   6. `put 1 2`: shows **WRONG CALCULATOR**
   7. `put 1 1`: shows **RETURN SUCCESS / PENALTY: P10**
 - [ ] `ana`: shows ACCOUNT BLOCKED. A `coin 5` while idle is recorded for refund.

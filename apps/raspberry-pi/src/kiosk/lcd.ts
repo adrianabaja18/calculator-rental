@@ -56,7 +56,10 @@ export const LCD = {
     screen(name, `${peso(feeCentavos)} / ${hours(durationMinutes)}`),
   payment: (paidCentavos: number, requiredCentavos: number) =>
     screen(`PAYMENT ${peso(paidCentavos)}/${peso(requiredCentavos)}`, 'INSERT COINS'),
-  lockerOpen: (lockerNumber: number) => screen(`LOCKER ${lockerNumber} OPEN`, 'TAKE CALCULATOR'),
+  /** Lock powered (10 s at most): what to do now, and the countdown the buzzer ticks along to. */
+  lockOpen: (what: string, secondsLeft: number) => screen(what, `LOCKS IN ${secondsLeft} SEC`),
+  /** Lock off again (no latch: an open door can't be shut now): what to do, and how to reopen. */
+  lockClosed: (what: string) => screen(what, 'OPEN AGAIN: BLUE'),
   // "RETURN BY 12:00 PM" (spec) is 18 chars; "DUE AT 12:00 PM" always fits in 16.
   // Due on another day (rental clock pauses while closed): "DUE WED 10:00 AM" (16).
   rentalSuccess: (dueAt: string, now: Date) =>
@@ -71,16 +74,13 @@ export const LCD = {
   closedForBorrowing: (opensAt: Date | null) => screen('KIOSK CLOSED', opensAt ? `OPEN ${shortWhen(opensAt)}` : 'SEE AN OFFICER'),
   penaltyDue: (overdueMinutes: number, penaltyCentavos: number) =>
     screen(`LATE ${Math.floor(overdueMinutes / 60)}H${String(overdueMinutes % 60).padStart(2, '0')}M`, `PAY PENALTY ${peso(penaltyCentavos)}`),
-  returnTo: (calculatorCode: string, lockerNumber: number) =>
-    screen(`RETURN CALC #${calculatorCode.replace(/^CALC-0*/, '')}`, `TO LOCKER ${lockerNumber}`),
-  wrongCalculator: (calculatorCode: string) => screen('WRONG CALCULATOR', `RETURN CALC #${calculatorCode.replace(/^CALC-0*/, '')}`),
+  wrongCalculator: (calculatorCode: string) => screen('WRONG CALCULATOR', `RETURN CALC #${calcNumber(calculatorCode)}`),
   returnSuccess: (penaltyPaidCentavos: number) =>
     penaltyPaidCentavos > 0 ? screen('RETURN SUCCESS', `PENALTY: ${peso(penaltyPaidCentavos)}`) : screen('RETURN SUCCESS', 'THANK YOU'),
   paymentTimeout: () => screen('PAYMENT TIMEOUT', 'PLEASE TRY AGAIN'),
   penaltyNotPaid: () => screen('RETURN CANCELLED', 'PENALTY NOT PAID'),
   removalTimeout: () => screen('NOT TAKEN', 'SEE AN OFFICER'),
   returnTimeout: () => screen('RETURN CANCELLED', 'NOT RETURNED'),
-  closeAndPressRed: () => screen('CLOSE THE DOOR', 'PUSH RED BUTTON'),
   officerUnlock: (lockerNumber: number) => screen('OFFICER UNLOCK', `LOCKER ${lockerNumber} OPEN`),
   /** Power saving (backlight off, so dim but readable up close). */
   sleeping: (closed: boolean) => screen('PRESS ANY BUTTON', closed ? 'TO RETURN' : 'TO START'),
@@ -88,6 +88,9 @@ export const LCD = {
   doorLeftOpen: () => screen('DOOR LEFT OPEN', 'SEE AN OFFICER'),
   systemError: () => screen('SYSTEM ERROR', 'SEE AN OFFICER'),
 } as const;
+
+/** "CALC-002" → "2" (the number printed on the calculator). */
+export const calcNumber = (calculatorCode: string) => calculatorCode.replace(/^CALC-0*/, '');
 
 /** One status word per locker for the 16-column LCD: READY = has a calculator you can rent now. */
 export function lockerStatusLine(lockers: ReadonlyArray<{ number: number; available: boolean }>): string {
