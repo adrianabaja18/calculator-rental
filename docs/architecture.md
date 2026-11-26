@@ -185,7 +185,7 @@ All three functions live in `packages/shared/src/sqlite-node.ts`, so the kiosk a
 
 Security: the code proves physical presence (only the LCD shows it); it is single-use and short-lived. Wrong codes are counted per phone (SHA-256 of its address with a per-Pi random salt; no addresses stored): 10 in 10 minutes → refused. The photo never leaves the phone; the QR text is **stored** in `scan_sessions` (team decision 2026-11-28) with when it was sent and whether the kiosk used it, listed on the dashboard's **ID Scans** page. The online (cloud) dashboard refuses `/api/scan`: scanning only happens on the Pi.
 
-Limit: phones only allow the **live** camera view on https. Over the Pi's plain `http://` address, **Take or upload a photo** works (it opens the phone's own camera app).
+Photo only (team decision 2026-11-28): phones allow the **live** camera view only on https, which the Pi doesn't serve, so the page hides that button on http and students use **Take or upload a photo** (the phone's own camera app). The kiosk network is the team's portable Wi-Fi, with the Pi's address reserved on it.
 
 ## 4. Folder structure
 

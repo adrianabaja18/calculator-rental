@@ -119,9 +119,9 @@ npm run build:web
 
 ### 4.2b Student ID scanning with phones (no ESP32-CAM)
 - With `QR_SCANNER=phone`, a student presses any kiosk button and the LCD shows a 6-digit code. On their phone they open `http://<pi-ip>:3000/scan` (from a printed sticker), scan or photograph their school ID, type the code and tap **Send to kiosk**.
-- Everything stays on the Pi (same SQLite file), so it works **without internet**. Phones only need to be on the kiosk's network (school Wi-Fi or the Pi's hotspot). Give the Pi a fixed address so the sticker keeps working.
+- Everything stays on the Pi (same SQLite file), so it works **without internet**. Phones only need to be on the kiosk's portable Wi-Fi. Reserve the Pi's address in that router (DHCP reservation) so the sticker keeps working.
 - Print the sticker from **Devices → Student scan page** while viewing the dashboard at the Pi's network address (or set `SCAN_PAGE_URL` in `apps/web/.env.local`).
-- Over plain `http://` phones allow **Take or upload a photo** but not the live camera view (that needs https).
+- Students use **Take or upload a photo** (photo only, by team decision). The live-camera button is hidden over plain `http://`.
 
 ### 4.3 Offline Clock Sync (No RTC Required)
 - With `REQUIRE_NTP_SYNC=false` (default), the kiosk starts immediately even without internet.
