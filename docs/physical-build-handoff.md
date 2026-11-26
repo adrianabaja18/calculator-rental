@@ -170,7 +170,7 @@ Leave the pin settings as they are. They match the final wiring:
 | `COIN_PIN` | `17` | PC817 output |
 | `BUZZER_PIN` | `18` | buzzer |
 | `RFID_SPI` / `RFID_RST_PINS` | `0.0,0.1` / `4,16` | readers 1 and 2 |
-| `CLOSE_BUTTON_PINS` / `SELECT_BUTTON_PINS` | `22,23` / `24,25` | red / blue buttons |
+| `CLOSE_BUTTON_PINS` / `SELECT_BUTTON_PINS` | `22,23` / `27,25` | red / blue buttons |
 | `LCD_I2C_ADDRESS` | `0x27` | change if `i2cdetect` shows `3f` |
 | `POWER_SAVE`, `SLEEP_AFTER_SECONDS` | `true`, `120` | idle sleep |
 
@@ -194,7 +194,7 @@ Use **[wiring-guide.pdf](wiring-guide.pdf)**: the 40-pin map is on page 2 and ea
 | 3 | **Buzzer** | I/O → pin 12, VCC → 3.3 V or 5 V as the module needs, GND → rail |
 | 4 | **Relay module** | VCC → pin 4 (5 V), GND → rail, IN1 → pin 29, IN2 → pin 31 |
 | 5 | **RC522 ×2** | 3.3 V rail only. SDA: reader 1 → pin 24, reader 2 → pin 26. SCK/MOSI/MISO shared → pins 23/19/21. RST: reader 1 → pin 7, reader 2 → pin 36. GND → rail. Readers ≥ 10 cm apart. |
-| 6 | **Buttons ×4** | COM ① → GND rail; NO ③ (bottom tab): RED 1 → pin 15, RED 2 → pin 16, BLUE 1 → pin 18, BLUE 2 → pin 22; NC ② unused |
+| 6 | **Buttons ×4** | COM ① → GND rail; NO ③ (bottom tab): RED 1 → pin 15, RED 2 → pin 16, BLUE 1 → pin 13, BLUE 2 → pin 22; NC ② unused |
 | 7 | **PC817 (coin)** | Pi side: pin 4 → pin 11 (GPIO 17) + 10 kΩ to pin 17 (3.3 V); pin 3 → pin 20 (GND). 12 V side: +12 V → 2.2 kΩ → pin 1; selector COIN → pin 2. |
 | 8 | **12 V side** | +12 V → relay COM1, COM2, coin selector +12 V, 2.2 kΩ. Relay NO1/NO2 → solenoid +. Solenoid − and selector GND → **12 V −**. **Flyback diode across each solenoid** (stripe to +). |
 | 9 | ~~ESP32-CAM~~ | Not used any more (phones scan IDs). Leave it unplugged. |
@@ -218,7 +218,7 @@ Then power on **in two steps**:
 ```bash
 npm run hwcheck:pi
 ```
-✅ The startup lists the devices and shows `RST 4,16`, `blue 24,25, red 22,23`.
+✅ The startup lists the devices and shows `RST 4,16`, `blue 27,25, red 22,23`.
 
 | Step | Type / do | Pass when |
 |---|---|---|
