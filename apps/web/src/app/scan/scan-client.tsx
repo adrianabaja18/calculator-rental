@@ -17,6 +17,9 @@ export function ScanClient() {
   const [code, setCode] = useState('');
   const [sending, setSending] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
+  // Phones only allow the live camera on https. On the Pi's plain http address, offer the photo only.
+  const [liveCameraAllowed, setLiveCameraAllowed] = useState(false);
+  useEffect(() => setLiveCameraAllowed(window.isSecureContext && !!navigator.mediaDevices?.getUserMedia), []);
   const fileInput = useRef<HTMLInputElement>(null);
 
   function accept(raw: string) {
@@ -112,12 +115,22 @@ export function ScanClient() {
           <LiveCamera onFound={accept} onClose={() => setCamera(false)} onFail={(m) => { setCamera(false); setProblem(m); }} />
         ) : (
           <div className="grid gap-2">
-            <button type="button" onClick={() => { setProblem(null); setCamera(true); }} className={primaryButton} disabled={reading}>
-              Use camera
-            </button>
-            <button type="button" onClick={() => fileInput.current?.click()} className={secondaryButton} disabled={reading}>
+            {liveCameraAllowed && (
+              <button type="button" onClick={() => { setProblem(null); setCamera(true); }} className={primaryButton} disabled={reading}>
+                Use camera
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              className={liveCameraAllowed ? secondaryButton : primaryButton}
+              disabled={reading}
+            >
               {reading ? 'Reading the photo…' : 'Take or upload a photo'}
             </button>
+            {!liveCameraAllowed && (
+              <p className="text-sm text-slate-600">Take a clear, close photo of the QR on your ID. Good light helps.</p>
+            )}
             <input ref={fileInput} type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0])} />
           </div>
         )}

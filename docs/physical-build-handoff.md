@@ -18,7 +18,7 @@ Related documents: [wiring-guide.pdf](wiring-guide.pdf) (every pin, printable), 
 
 > ⚠️ **Honest status:** everything below is tested in software (387 automated tests and a simulator), but **none of it has run on your physical kiosk yet**. Expect to debug. Section 9 lists what is most likely to need adjusting.
 
-> 📱 **No ESP32-CAM any more (Phase 14e).** Students scan their ID with **their own phone**: they press any kiosk button, the LCD shows a 6-digit code, and they send their ID from the Pi's `/scan` page. Leave the ESP32-CAM unplugged (keep it as a spare). No internet is needed, but **phones must be on the kiosk's network** (school Wi-Fi or the Pi's hotspot).
+> 📱 **No ESP32-CAM any more (Phase 14e).** Students scan their ID with **their own phone**: they press any kiosk button, the LCD shows a 6-digit code, and they send their ID from the Pi's `/scan` page. Leave the ESP32-CAM unplugged (keep it as a spare). No internet is needed, but **phones must be on the kiosk's network** (the team's portable Wi-Fi).
 
 > 🏠 **The dashboard now runs on the Pi itself** (team PR #20/#21). Where this guide mentions a laptop backend, Supabase or `db:push`, follow [raspberry-pi-local-setup.md](raspberry-pi-local-setup.md) instead.
 
@@ -96,9 +96,10 @@ Until Phase 15 deploys the dashboard to Vercel, the kiosk talks to **a laptop ru
 Do this once the Pi runs the web app (Stage 2 and [raspberry-pi-local-setup.md](raspberry-pi-local-setup.md)). Students open `http://<pi-ip>:3000/scan` on their phone.
 1. From a phone or laptop **on the kiosk network**, open the dashboard at the Pi's address (e.g. `http://192.168.1.50:3000`) and sign in.
 2. **Devices** → **Student scan page** → **Download the QR (SVG)**. Print it about 5 × 5 cm and stick it next to the LCD with a line like "Scan to send your ID". If the card shows a yellow warning, you opened the dashboard as `localhost`: use the Pi's address, or set `SCAN_PAGE_URL` in `apps/web/.env.local`.
-3. Give the Pi a **fixed address** (a DHCP reservation on the router, or the Pi's own hotspot), or the sticker stops working when the address changes.
+3. Give the Pi a **fixed address** on the portable Wi-Fi, or the sticker stops working when the address changes. In the portable router's admin page (usually printed on its label, e.g. `192.168.0.1` or `192.168.8.1`), find **DHCP reservation / Address reservation / Static IP**, pick the Pi (hostname `raspberrypi`, or match its MAC from `ip link show wlan0`), and reserve its current address. Reboot the Pi and check `hostname -I` still shows it.
+   Also write the Wi-Fi **name** on the sticker (e.g. "Join CPE-KIOSK, then scan"), and keep the router's Wi-Fi password simple or open, since every student must join it.
 4. Test with at least one **Android** and one **iPhone**: scan the sticker → the page opens → **Take or upload a photo** of a test ID → the name appears. Try a dim spot and a slightly dirty ID too.
-5. **Live camera** (the **Use camera** button) needs **https**. Over the Pi's `http://` address phones refuse it, and the page says so and offers the photo option. That's expected.
+5. Students use **Take or upload a photo** (it opens the phone's normal camera app). The live-camera button is hidden on the Pi's `http://` address because phones only allow it on https (team decision: photo only).
 
 ✅ Both phones read a test ID from a photo and show the right name.
 ❌ If a phone can't open the page at all, it's not on the kiosk's network, or the web app on the Pi isn't running.
@@ -335,7 +336,7 @@ journalctl -u calculator-kiosk -f
 ## 9. Most likely to need adjusting (and what to send back)
 | Area | Why it's uncertain | If it misbehaves |
 |---|---|---|
-| Phone scanning | depends on the kiosk network and each phone's camera | photo upload is the fallback for the live camera; if phones can't reach the page, check they're on the kiosk network and the Pi's address hasn't changed. Send the phone model and what the page said. |
+| Phone scanning | depends on the portable Wi-Fi and each phone's camera | if "No QR code found", take the photo closer and sharper; if phones can't open the page, check they joined the kiosk Wi-Fi and the Pi's reserved address hasn't changed. Send the phone model and what the page said. |
 | Solenoid heat | held open up to 60–90 s | lower the timeouts in Settings (minimum 15 s) |
 | LCD on 5 V pull-ups | can confuse the Pi's I2C | level shifter, or remove the backpack resistors |
 | Relays at 3.3 V | some boards don't switch off fully | JD-VCC trick, [raspberry-pi.md](raspberry-pi.md) §3.1 |

@@ -76,7 +76,7 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 4b | Solenoid heat when held unlocked | Phase 11 bring-up | ⏳ The lock is held ON until the red button is pressed (up to 60/90 s). Run the heat check in `docs/raspberry-pi.md` §3.1; if the lock gets too hot, lower the removal/return timeouts in Settings. |
 | 5 | Real **RFID UIDs** of the two calculator tags | Phase 12 | ✅ Tag A `FE-AC-31-03` → CALC-001 (Locker 1), tag B `57-99-3B-03` → CALC-002 (Locker 2). ⚠️ **Enter them on the dashboard** (Calculators → Edit) before running the kiosk with sync, or the dashboard's fake seed UIDs replace them on the kiosk. |
 | 6b | ~~ESP32-CAM firmware 1.1.0~~ | — | ✅ **Not needed**: the ESP32-CAM is replaced by phone scanning (decided 2026-11-28). |
-| 6c | **Phones must reach the Pi** | Physical build | ⚠️ Students' phones need to join the kiosk's network (school Wi-Fi or the Pi's hotspot) to open `/scan`. The **live camera** view needs **https**; over the Pi's `http://` address students use **Take or upload a photo**. Decide later whether to add https on the Pi. |
+| 6c | **Phones must reach the Pi** | Physical build | ✅ The kiosk uses the **team's portable Wi-Fi**; students join it to open `/scan`. Reserve the Pi's address on that router. **Photo upload only** (decided 2026-11-28): no https on the Pi, so the live-camera button is hidden. |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
 | — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, **paid before the return locker opens** (2026-11-18). **Operating hours Mon–Fri 9 AM–5 PM; rental and late time count only while open** (2026-11-27, replaces counting overnight). All editable on the Settings page. |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
@@ -180,7 +180,7 @@ student scans the sticker ─▶ http://<pi-ip>:3000/scan on their phone ─▶ 
 student types the code ─▶ POST /api/scan {code, qr} ─▶ web app on the Pi checks the code, parses the QR again
 kiosk checks SQLite every 0.5 s ─▶ gets the ID text once ─▶ the normal borrow/return flow (blue button, coins, …)
 ```
-- **No internet needed:** the web app and the kiosk share the Pi's SQLite file. Phones only need to be on the kiosk's network (school Wi-Fi or the Pi's hotspot).
+- **No internet needed:** the web app and the kiosk share the Pi's SQLite file. Phones only need to be on the kiosk's portable Wi-Fi.
 - The **code** proves the student is at the kiosk (it's only on the LCD). Codes are random, single-use, and expire after 2 minutes. A new code ends the previous one.
 - **Guessing is blocked:** 10 wrong codes in 10 minutes from one phone → "Too many wrong codes" for a while. Phones are counted by a salted hash of their address; no addresses are stored.
 - **Stored:** every ID sent from a phone is **kept** in the Pi's SQLite (`scan_sessions.qr_payload`, with the time it was sent and whether the kiosk used it). The photo itself never leaves the phone; only the QR text is sent.
@@ -214,7 +214,7 @@ kiosk checks SQLite every 0.5 s ─▶ gets the ID text once ─▶ the normal b
 - [ ] Unplug the Pi's internet (keep the Wi-Fi/hotspot): borrowing with a phone still works.
 
 ### Known limits
-- The live camera view needs https; over `http://<pi-ip>` students use the photo button.
+- Photo upload only: phones allow the live camera view only on https, which the team decided not to set up. The page hides that button on http.
 - If the web app on the Pi is stopped, phones can't open `/scan`. The kiosk still shows codes, which then run out.
 - The simulator still uses its typed "scan" box (it has no phone link).
 

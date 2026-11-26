@@ -207,7 +207,7 @@ export default async function DeviceStatusPage() {
                 </p>
               )}
               <p className="mt-2 text-slate-500">
-                Over plain http phones can take or upload a photo of the ID; the live camera view needs https.
+                Students take or upload a photo of their ID. Reserve the Pi's address on the Wi-Fi router so this link keeps working.
               </p>
               <a
                 href={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(scan.svg)}`}

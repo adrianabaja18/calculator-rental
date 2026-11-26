@@ -17,7 +17,7 @@ Source text for the kiosk brochure/pamphlet. It matches what the kiosk actually 
 - **Phone QR sticker**: scan it with your phone to open the ID scan page.
 
 ## Before you start
-- Bring your **school ID with its QR code** and a **phone with a camera**, connected to the **kiosk Wi-Fi** (shown on the sticker).
+- Bring your **school ID with its QR code** and a **phone with a camera**, connected to the **kiosk Wi-Fi** (its name is on the sticker).
 - Bring **coins**: ₱1, ₱5, ₱10 or ₱20. **The kiosk does not give change.**
 - You can rent **one calculator at a time**.
 
@@ -42,7 +42,7 @@ Source text for the kiosk brochure/pamphlet. It matches what the kiosk actually 
    - **N/A** = not available.
 2. **Press any button.** The screen shows `SCAN ID ON PHONE` / `CODE 482913 1:55`. You have 2 minutes to send your ID.
 3. **Open the scan page on your phone** by scanning the QR sticker on the kiosk with your phone camera.
-4. **Scan your school ID.** Tap **Use camera** and point it at the QR on your ID, or tap **Take or upload a photo**. Check that your name is shown.
+4. **Take a photo of your school ID.** Tap **Take or upload a photo** and take a close, sharp photo of the QR on your ID. Check that your name is shown.
 5. **Type the 6-digit code** from the kiosk screen and tap **Send to kiosk**.
 6. **Choose a locker.** The screen shows `PUSH BLUE BUTTON`. Press the **BLUE** button of a locker marked **READY** within 30 seconds.
 7. **Pay ₱20.** The screen shows your name and `P20 / 3 HOURS`. Insert coins until it reads `PAYMENT P20/P20`.
@@ -59,9 +59,9 @@ Source text for the kiosk brochure/pamphlet. It matches what the kiosk actually 
 6. **Done!** The screen shows `RETURN SUCCESS` / `THANK YOU`, or the late fee you paid.
 
 ## Tips for scanning your ID
-- Use good light. In a dim room tap **Light on** (on phones that have it).
+- Use good light. In a dim room turn on your phone camera's flash.
 - Bring the phone close so the QR fills the frame, hold it steady, and avoid glare from the ID's plastic.
-- Wipe a dirty ID first. If the live camera struggles, a sharp photo usually works.
+- Wipe a dirty ID first. If it says no QR was found, take the photo again a little closer.
 - Your photo stays on your phone. Only the text in the QR (name, student number, course) is sent, and the kiosk keeps it as a record.
 
 ---
