@@ -24,10 +24,11 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 echo ""
-echo "[1/7] Enabling SPI and I2C interfaces..."
+echo "[1/7] Enabling SPI and I2C interfaces (and freeing GPIO 4 from 1-Wire)..."
 if command -v raspi-config >/dev/null 2>&1; then
   sudo raspi-config nonint do_spi 0
   sudo raspi-config nonint do_i2c 0
+  sudo raspi-config nonint do_onewire 1 || true
 else
   echo "  (raspi-config not found; skipping automatic SPI/I2C toggle)"
 fi
@@ -133,7 +134,7 @@ WorkingDirectory=${REPO_DIR}
 Environment=NODE_ENV=production
 Environment=NEXT_TELEMETRY_DISABLED=1
 Environment=NEXT_PUBLIC_DATA_BACKEND=local
-ExecStart=${NPM_BIN} run start:web -- --hostname 0.0.0.0
+ExecStart=${NPM_BIN} run start:web
 Restart=always
 RestartSec=5
 

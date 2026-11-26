@@ -154,7 +154,7 @@ User=pi
 WorkingDirectory=/home/pi/calculator-rental
 Environment=NODE_ENV=production
 Environment=NEXT_PUBLIC_DATA_BACKEND=local
-ExecStart=/usr/bin/npm run start:web -- --hostname 0.0.0.0
+ExecStart=/usr/bin/npm run start:web
 Restart=always
 RestartSec=5
 
