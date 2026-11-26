@@ -6,9 +6,17 @@ import type { DatabaseSync as DatabaseSyncType, SQLInputValue } from 'node:sqlit
 import { AdminRole } from './enums';
 import { SQLITE_MIGRATIONS, SQL_UTC_NOW } from './sqlite-migrations';
 
-const nodeRequire = createRequire(import.meta.url);
+const sqliteModuleId = ['node', 'sqlite'].join(':');
 function loadDatabaseSync(): typeof DatabaseSyncType {
-  const mod = nodeRequire('node:sqlite') as { DatabaseSync: typeof DatabaseSyncType };
+  const builtinLoader = (process as NodeJS.Process & { getBuiltinModule?: (id: string) => unknown }).getBuiltinModule;
+  const mod = (
+    typeof builtinLoader === 'function'
+      ? builtinLoader(sqliteModuleId)
+      : createRequire(path.join(process.cwd(), 'package.json'))(sqliteModuleId)
+  ) as { DatabaseSync: typeof DatabaseSyncType } | undefined;
+  if (!mod?.DatabaseSync) {
+    throw new Error('Built-in node:sqlite module is unavailable. Node.js >= 22.12 is required.');
+  }
   return mod.DatabaseSync;
 }
 

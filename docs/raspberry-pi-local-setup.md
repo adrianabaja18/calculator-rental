@@ -51,7 +51,28 @@ npm run start:pi
 
 ## 4. Transferring to the Raspberry Pi 4
 
-### 4.1 Install OS Packages & Node.js 22 LTS
+### Quick Automated Setup (Recommended — One Command)
+On Raspberry Pi OS 64-bit (Bookworm or newer), clone the repo and run the turnkey installer—it enables SPI/I2C, installs Python GPIO packages and Node.js 22 LTS, configures `.env` + `.env.local`, seeds the local SQLite database and real calculator RFID UIDs, builds the production Next.js dashboard, and installs/enables both `systemd` auto-start services:
+
+```bash
+cd ~
+git clone https://github.com/adrianabaja18/calculator-rental.git
+cd calculator-rental
+chmod +x scripts/setup-rpi4.sh
+./scripts/setup-rpi4.sh
+sudo reboot
+```
+
+To take a safe live snapshot backup of the Pi's SQLite database at any time (even while the kiosk and web dashboard are running):
+```bash
+npm run backup:pi
+```
+
+---
+
+### Manual Step-by-Step Reference (What `setup-rpi4.sh` Does)
+
+#### 4.1 Install OS Packages & Node.js 22 LTS
 On Raspberry Pi OS 64-bit (Bookworm or newer):
 
 ```bash
@@ -87,9 +108,9 @@ SCANNER_PORT=/dev/ttyUSB0
 REQUIRE_NTP_SYNC=false
 LOG_PRETTY=false
 
-# Optional: enable when you deploy the online read-only dashboard
-CLOUD_SYNC_ENABLED=false
-CLOUD_BACKEND_URL=
+# Optional: pushes to online read-only dashboard when internet is available
+CLOUD_SYNC_ENABLED=true
+CLOUD_BACKEND_URL=https://calculator-rental.vercel.app
 ```
 
 Build the production Next.js dashboard on the Pi:
@@ -133,7 +154,7 @@ User=pi
 WorkingDirectory=/home/pi/calculator-rental
 Environment=NODE_ENV=production
 Environment=NEXT_PUBLIC_DATA_BACKEND=local
-ExecStart=/usr/bin/npm run start:web -- --hostname 0.0.0.0
+ExecStart=/usr/bin/npm run start:web
 Restart=always
 RestartSec=5
 
@@ -161,7 +182,7 @@ sudo systemctl enable --now calculator-kiosk calculator-web
 3. Set a shared `DEVICE_SECRET` (see [physical-build-handoff.md](physical-build-handoff.md) §0.3) and update `apps/raspberry-pi/.env` on the Pi:
    ```ini
    CLOUD_SYNC_ENABLED=true
-   CLOUD_BACKEND_URL=https://your-online-monitor.vercel.app
+   CLOUD_BACKEND_URL=https://calculator-rental.vercel.app
    DEVICE_SECRET=<your-device-secret>
    ```
 4. Restart the kiosk (`sudo systemctl restart calculator-kiosk`). All local rentals, returns, payments, settings, blocks, waivers, and audit logs will automatically upload whenever the Pi has internet access.
