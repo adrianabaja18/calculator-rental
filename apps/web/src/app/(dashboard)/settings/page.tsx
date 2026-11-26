@@ -1,26 +1,26 @@
 import type { Metadata } from 'next';
-import { AdminRole, hasRole, systemSettingsFromRow } from '@calc-rental/shared';
+import { AdminRole, hasRole } from '@calc-rental/shared';
 import { PageHeader } from '@/components/page-header';
 import { requireAdmin } from '@/lib/auth/session';
+import { querySystemSettings } from '@/lib/data/queries';
 import { formatDateTime } from '@/lib/format';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { isDashboardReadOnly } from '@/lib/mode';
 import { SettingsForm } from './settings-form';
 
 export const metadata: Metadata = { title: 'Settings' };
 
 export default async function SettingsPage() {
   const admin = await requireAdmin();
-  const supabase = await createSupabaseServerClient();
-  const { data: row, error } = await supabase.from('system_settings').select('*').eq('id', 1).single();
-  if (error || !row) throw new Error('Failed to load settings');
+  const { settings, updatedAt } = await querySystemSettings();
+  const canEdit = hasRole(admin.role, AdminRole.SUPER_ADMIN) && !isDashboardReadOnly();
 
   return (
     <>
       <PageHeader
         title="Settings"
-        description={`Rental and penalty rules used by the kiosk. Last changed ${formatDateTime(row.updated_at)}.`}
+        description={`Rental and penalty rules used by the kiosk.${updatedAt ? ` Last changed ${formatDateTime(updatedAt)}.` : ''}`}
       />
-      <SettingsForm settings={systemSettingsFromRow(row)} canEdit={hasRole(admin.role, AdminRole.SUPER_ADMIN)} />
+      <SettingsForm settings={settings} canEdit={canEdit} />
     </>
   );
 }

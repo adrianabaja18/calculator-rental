@@ -5,21 +5,15 @@ import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryDeviceStatusPageData } from '@/lib/data/queries';
 import { formatDateTime, formatRelative } from '@/lib/format';
+import { isDashboardReadOnly, isLocalBackend } from '@/lib/mode';
 import { humanize, toneFor } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { EmergencyUnlockButton, SyncNowButton } from './device-actions';
+import { EmergencyUnlockButton, SyncClockButton, SyncNowButton } from './device-actions';
 
 export const metadata: Metadata = { title: 'Device Status' };
 
 const LIVE_TABLES = ['device_registry', 'lockers', 'device_commands'] as const;
-
-/** What the kiosk reports in last_health with every heartbeat. */
-interface KioskHealth {
-  kioskState?: string;
-  clockDriftSeconds?: number;
-  sync?: { lastPushAt: string | null; lastPullAt: string | null; lastError: string | null; failedItems: number } | null;
-}
 
 function Stat({ label, children, warn = false }: { label: string; children: React.ReactNode; warn?: boolean }) {
   return (
@@ -32,67 +26,80 @@ function Stat({ label, children, warn = false }: { label: string; children: Reac
 
 export default async function DeviceStatusPage() {
   const admin = await requireAdmin(AdminRole.VIEWER);
-  const canAct = hasRole(admin.role, AdminRole.OFFICER);
-  const supabase = await createSupabaseServerClient();
+  const local = isLocalBackend();
+  const canAct = hasRole(admin.role, AdminRole.OFFICER) && !isDashboardReadOnly();
 
-  const [devices, lockers, commands] = await Promise.all([
-    supabase.from('v_devices').select('*').order('device_code'),
-    supabase.from('v_lockers').select('*').order('locker_number'),
-    supabase.from('device_commands').select('*').order('requested_at', { ascending: false }).limit(15),
-  ]);
-  if (devices.error || lockers.error || commands.error) throw new Error('Failed to load device status');
+  const { devices, lockers, commands } = await queryDeviceStatusPageData();
 
   return (
     <>
       <PageHeader
         title="Device Status"
-        description="Kiosk health from its heartbeat (every 30 s) and sync. Sensor states are what the kiosk reported last."
+        description={
+          local
+            ? 'Live local Raspberry Pi 4 kiosk status from SQLite. Emergency unlocks execute locally within ~1 second.'
+            : 'Kiosk health from its heartbeat (every 30 s) and outbound cloud sync.'
+        }
         actions={<LiveRefresh tables={LIVE_TABLES} />}
       />
 
-      {devices.data.length === 0 && <p className="text-sm text-slate-600">No kiosk is registered yet.</p>}
+      {devices.length === 0 && <p className="text-sm text-slate-600">No kiosk is registered yet.</p>}
 
-      {devices.data.map((d) => {
-        const health = (d.last_health ?? {}) as KioskHealth;
+      {devices.map((d) => {
         const online = d.connection_status === 'ONLINE';
-        const syncError = d.last_sync_error ?? health.sync?.lastError ?? null;
-        const failedItems = health.sync?.failedItems ?? 0;
-        const temp = d.cpu_temp_c === null ? null : Number(d.cpu_temp_c);
-        const drift = health.clockDriftSeconds ?? null;
-        const deviceLockers = lockers.data.filter((l) => l.device_id === d.id);
+        const syncError = d.last_sync_error;
+        const failedItems = d.failed_items;
+        const temp = d.cpu_temp_c;
+        const drift = d.clock_drift_seconds;
+        const deviceLockers = lockers.filter((l) => l.device_id === d.id);
+        const waitingClock = d.kiosk_state === 'WAITING_FOR_CLOCK';
 
         return (
           <section key={d.id} className="mb-8">
+            {local && waitingClock && (
+              <div role="alert" className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                <strong>Kiosk waiting for clock sync:</strong> The Raspberry Pi booted without internet NTP. Click{' '}
+                <strong>Sync clock from browser</strong> to set the kiosk time from your phone/laptop immediately.
+              </div>
+            )}
+
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <h2 className="text-lg font-semibold text-slate-900">{d.name}</h2>
                 <StatusBadge tone={toneFor(d.connection_status)}>{humanize(d.connection_status)}</StatusBadge>
                 <StatusBadge tone={toneFor(d.health)}>{humanize(d.health)}</StatusBadge>
               </div>
-              {canAct && d.id && <SyncNowButton deviceId={d.id} />}
+              {canAct && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {local && <SyncClockButton />}
+                  <SyncNowButton deviceId={d.id} local={local} />
+                </div>
+              )}
             </div>
 
             <dl className="mb-4 grid grid-cols-2 gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-3 lg:grid-cols-6">
               <Stat label="Last heartbeat">{formatRelative(d.last_heartbeat_at)}</Stat>
-              <Stat label="Kiosk state">{humanize(health.kioskState)}</Stat>
-              <Stat label="Power">{health.kioskState === 'SLEEPING' ? 'Asleep (saving power)' : 'Awake'}</Stat>
+              <Stat label="Kiosk state" warn={waitingClock}>{humanize(d.kiosk_state)}</Stat>
+              <Stat label="Power">{d.kiosk_state === 'SLEEPING' ? 'Asleep (saving power)' : 'Awake'}</Stat>
               <Stat label="CPU temperature" warn={temp !== null && temp >= 75}>
                 {temp === null ? '—' : `${temp.toFixed(1)} °C`}
               </Stat>
-              <Stat label="Clock difference" warn={drift !== null && Math.abs(drift) > 120}>
-                {drift === null ? '—' : `${drift > 0 ? '+' : ''}${drift} s`}
+              <Stat label={local ? 'Kiosk clock' : 'Clock difference'} warn={!local && drift !== null && Math.abs(drift) > 120}>
+                {local
+                  ? (d.kiosk_now_iso ? formatDateTime(d.kiosk_now_iso) : '—')
+                  : (drift === null ? '—' : `${drift > 0 ? '+' : ''}${drift} s`)}
               </Stat>
               <Stat label="Software">{d.software_version ?? '—'}</Stat>
-              <Stat label="Waiting to sync" warn={(d.sync_queue_count ?? 0) > 100}>
-                {d.sync_queue_count ?? 0} change{d.sync_queue_count === 1 ? '' : 's'}
+              <Stat label="Waiting for cloud sync" warn={d.sync_queue_count > 100}>
+                {d.sync_queue_count} change{d.sync_queue_count === 1 ? '' : 's'}
               </Stat>
-              <Stat label="Last upload">{formatRelative(d.last_sync_at)}</Stat>
-              <Stat label="Last download">{formatRelative(d.last_pull_at)}</Stat>
+              <Stat label="Last cloud upload">{formatRelative(d.last_sync_at)}</Stat>
+              <Stat label="Mode">{local ? 'Local SQLite' : 'Cloud Monitor'}</Stat>
               <Stat label="Set aside (need an officer)" warn={failedItems > 0}>
                 {failedItems}
               </Stat>
               <div className="col-span-2">
-                <Stat label="Sync problem" warn={!!syncError}>
+                <Stat label="Cloud sync note" warn={Boolean(syncError)}>
                   {syncError ?? 'None'}
                 </Stat>
               </div>
@@ -139,7 +146,7 @@ export default async function DeviceStatusPage() {
                     <Td>{formatRelative(l.last_seen_at)}</Td>
                     {canAct && (
                       <Td className="text-right">
-                        {l.id && l.name && <EmergencyUnlockButton locker={{ id: l.id, name: l.name }} online={online} />}
+                        <EmergencyUnlockButton locker={{ id: l.id, name: l.name }} online={online} />
                       </Td>
                     )}
                   </tr>
@@ -162,24 +169,21 @@ export default async function DeviceStatusPage() {
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {commands.data.length === 0 && <EmptyRow colSpan={5} title="No commands yet" />}
-          {commands.data.map((c) => {
-            const payload = (c.payload ?? {}) as { lockerNumber?: number; requestedBy?: string };
-            return (
-              <tr key={c.id} className="hover:bg-slate-50">
-                <Td>
-                  {formatDateTime(c.requested_at)}
-                  {payload.requestedBy && <Sub>{payload.requestedBy}</Sub>}
-                </Td>
-                <Td>{c.command === 'UNLOCK_LOCKER' ? `Unlock Locker ${payload.lockerNumber ?? '?'}` : 'Sync now'}</Td>
-                <Td>{c.reason ?? '—'}</Td>
-                <Td>
-                  <StatusBadge tone={toneFor(c.status)}>{humanize(c.status)}</StatusBadge>
-                </Td>
-                <Td>{c.result_message ?? '—'}</Td>
-              </tr>
-            );
-          })}
+          {commands.length === 0 && <EmptyRow colSpan={5} title="No commands yet" />}
+          {commands.map((c) => (
+            <tr key={c.id} className="hover:bg-slate-50">
+              <Td>
+                {formatDateTime(c.requested_at)}
+                {c.payload.requestedBy && <Sub>{c.payload.requestedBy}</Sub>}
+              </Td>
+              <Td>{c.command === 'UNLOCK_LOCKER' ? `Unlock Locker ${c.payload.lockerNumber ?? '?'}` : 'Sync now'}</Td>
+              <Td>{c.reason ?? '—'}</Td>
+              <Td>
+                <StatusBadge tone={toneFor(c.status)}>{humanize(c.status)}</StatusBadge>
+              </Td>
+              <Td>{c.result_message ?? '—'}</Td>
+            </tr>
+          ))}
         </tbody>
       </TableCard>
     </>

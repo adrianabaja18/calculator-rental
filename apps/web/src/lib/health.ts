@@ -7,11 +7,12 @@ import {
 } from '@calc-rental/shared';
 import { readPublicEnv } from '@/lib/env';
 import { readServerEnv } from '@/lib/env.server';
+import { getLocalDb, resolveLocalSqlitePath } from '@/lib/local-db';
+import { isLocalBackend } from '@/lib/mode';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 const CHECK_TIMEOUT_MS = 5_000;
 
-/** Rejects if `promise` takes longer than `ms`. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Timed out after ${ms} ms`)), ms);
@@ -28,18 +29,15 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/**
- * Checks that the public (anon/publishable) key can reach Supabase.
- * Calls the Auth service's health endpoint — it needs no tables, so it
- * works in Phase 1 before any migration exists.
- */
 async function checkSupabasePublic(): Promise<ServiceCheck> {
   const env = readPublicEnv();
   if (!env) {
     return {
       status: 'not_configured',
       latencyMs: null,
-      message: 'NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY are not set in apps/web/.env.local.',
+      message: isLocalBackend()
+        ? 'Running in local Raspberry Pi SQLite mode (cloud Supabase optional).'
+        : 'NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY are not set in apps/web/.env.local.',
     };
   }
 
@@ -67,22 +65,19 @@ async function checkSupabasePublic(): Promise<ServiceCheck> {
     return {
       status: 'unreachable',
       latencyMs: null,
-      message: 'Could not reach Supabase (network error or timeout). Check NEXT_PUBLIC_SUPABASE_URL and your internet connection.',
+      message: 'Could not reach Supabase (offline or timeout). Local SQLite keeps running.',
     };
   }
 }
 
-/**
- * Checks that the server-only service-role key is valid by calling an
- * admin-only Auth API (list at most 1 user). Only "ok"/"error" is reported —
- * no user data ever leaves this function.
- */
 async function checkSupabaseAdmin(): Promise<ServiceCheck> {
   if (!readPublicEnv() || !readServerEnv()) {
     return {
       status: 'not_configured',
       latencyMs: null,
-      message: 'SUPABASE_SERVICE_ROLE_KEY (and the public Supabase URL) must be set in apps/web/.env.local.',
+      message: isLocalBackend()
+        ? 'Local SQLite mode active; service-role key is only required on the online cloud deployment.'
+        : 'SUPABASE_SERVICE_ROLE_KEY (and the public Supabase URL) must be set in apps/web/.env.local.',
     };
   }
 
@@ -107,12 +102,54 @@ async function checkSupabaseAdmin(): Promise<ServiceCheck> {
     return {
       status: 'unreachable',
       latencyMs: null,
-      message: 'Could not reach Supabase with the service-role client (network error or timeout).',
+      message: 'Could not reach Supabase with the service-role client (offline or timeout).',
+    };
+  }
+}
+
+function checkLocalSqlite(): ServiceCheck {
+  const started = performance.now();
+  try {
+    const db = getLocalDb();
+    const quick = db.pragma('quick_check', { simple: true });
+    const version = db.pragma('user_version', { simple: true });
+    const latencyMs = Math.round(performance.now() - started);
+    if (quick !== 'ok') {
+      return { status: 'error', latencyMs, message: `SQLite quick_check reported: ${String(quick)}` };
+    }
+    return {
+      status: 'ok',
+      latencyMs,
+      message: `Local SQLite ready (v${String(version)}, WAL) at ${resolveLocalSqlitePath()}`,
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      latencyMs: null,
+      message: `Local SQLite failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }
 
 export async function getHealthReport(): Promise<HealthReport> {
+  if (isLocalBackend()) {
+    const localCheck = checkLocalSqlite();
+    const cloudConfigured = Boolean(readPublicEnv() && readServerEnv());
+    const [supabase, supabaseAdmin] = cloudConfigured
+      ? await Promise.all([checkSupabasePublic(), checkSupabaseAdmin()])
+      : [localCheck, { status: 'ok' as const, latencyMs: localCheck.latencyMs, message: 'Local admin authentication & SQLite store active.' }];
+
+    return {
+      service: WEB_SERVICE_ID,
+      status: localCheck.status === 'ok' ? 'ok' : 'degraded',
+      version: APP_VERSION,
+      environment: `${process.env.NODE_ENV ?? 'development'}-local`,
+      serverTime: new Date().toISOString(),
+      uptimeSeconds: Math.round(process.uptime()),
+      checks: { supabase, supabaseAdmin },
+    };
+  }
+
   const [supabase, supabaseAdmin] = await Promise.all([
     checkSupabasePublic(),
     checkSupabaseAdmin(),

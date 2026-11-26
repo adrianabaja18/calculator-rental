@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
-import { OUTSTANDING_RENTAL_STATUSES, operatingCalendar, systemSettingsFromRow } from '@calc-rental/shared';
+import { operatingCalendar } from '@calc-rental/shared';
 import { LiveRefresh } from '@/components/live-refresh';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryActiveRentals } from '@/lib/data/queries';
 import { formatDateTime, formatPeso } from '@/lib/format';
 import { toneFor } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { Countdown } from './countdown';
 
 export const metadata: Metadata = { title: 'Active Rentals' };
@@ -16,15 +16,8 @@ const LIVE_TABLES = ['rental_transactions', 'penalties'] as const;
 
 export default async function ActiveRentalsPage() {
   await requireAdmin();
-  const supabase = await createSupabaseServerClient();
-  const [{ data: rentals, error }, { data: settingsRow }] = await Promise.all([
-    supabase.from('v_rentals').select('*').in('status', [...OUTSTANDING_RENTAL_STATUSES]).order('due_at', { ascending: true }),
-    supabase.from('system_settings').select('*').eq('id', 1).single(),
-  ]);
-  if (error) throw new Error('Failed to load active rentals');
-  // Countdowns follow the operating hours (time while closed doesn't count).
-  const calendar = operatingCalendar(settingsRow ? systemSettingsFromRow(settingsRow) : {});
-
+  const { rentals, settings } = await queryActiveRentals();
+  const calendar = operatingCalendar(settings);
   const overdue = rentals.filter((r) => r.effective_status === 'OVERDUE').length;
 
   return (
@@ -56,7 +49,7 @@ export default async function ActiveRentalsPage() {
             <EmptyRow
               colSpan={9}
               title="No calculators are out right now"
-              hint="Rentals appear here as soon as the kiosk syncs them."
+              hint="Active rentals appear here immediately."
             />
           )}
           {rentals.map((r) => (
@@ -75,7 +68,7 @@ export default async function ActiveRentalsPage() {
               <Td className="whitespace-nowrap">{formatDateTime(r.due_at)}</Td>
               <Td>{r.due_at ? <Countdown dueAt={r.due_at} calendar={calendar} /> : '—'}</Td>
               <Td>
-                <StatusBadge tone={toneFor(r.effective_status)}>{r.effective_status ?? ''}</StatusBadge>
+                <StatusBadge tone={toneFor(r.effective_status)}>{r.effective_status}</StatusBadge>
                 {Number(r.penalty_amount_due) > 0 && <Sub>Penalty due {formatPeso(r.penalty_amount_due)}</Sub>}
               </Td>
               <Td className="text-right tabular-nums">{formatPeso(r.amount_paid)}</Td>

@@ -5,9 +5,10 @@ import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { FilterBar } from '@/components/ui/filter-bar';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryStudents } from '@/lib/data/queries';
 import { cleanSearch, formatPeso } from '@/lib/format';
+import { isDashboardReadOnly } from '@/lib/mode';
 import { humanize, toneFor } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { StudentRowActions } from './student-actions';
 
 export const metadata: Metadata = { title: 'Students' };
@@ -22,15 +23,9 @@ export default async function StudentsPage({ searchParams }: { searchParams: Pro
   const status = (Object.values(StudentStatus) as string[]).includes(params.status ?? '')
     ? (params.status as StudentStatus)
     : '';
-  const canManage = hasRole(admin.role, AdminRole.OFFICER);
+  const canManage = hasRole(admin.role, AdminRole.OFFICER) && !isDashboardReadOnly();
 
-  const supabase = await createSupabaseServerClient();
-  let query = supabase.from('v_students').select('*').order('full_name').limit(PAGE_LIMIT);
-  if (q) query = query.or(`full_name.ilike.%${q}%,student_number.ilike.%${q}%,course_program.ilike.%${q}%`);
-  if (status) query = query.eq('status', status);
-  const { data: students, error } = await query;
-  if (error) throw new Error('Failed to load students');
-
+  const students = await queryStudents({ q, status, limit: PAGE_LIMIT });
   const columns = canManage ? 8 : 7;
 
   return (
@@ -98,17 +93,17 @@ export default async function StudentsPage({ searchParams }: { searchParams: Pro
                 )}
               </Td>
               <Td>
-                <StatusBadge tone={toneFor(s.status)}>{s.status ?? ''}</StatusBadge>
+                <StatusBadge tone={toneFor(s.status)}>{s.status}</StatusBadge>
                 {s.blocked_reason && <Sub>{s.blocked_reason}</Sub>}
               </Td>
               {canManage && (
                 <Td className="text-right">
                   <StudentRowActions
                     student={{
-                      id: s.id!,
-                      fullName: s.full_name!,
-                      studentNumber: s.student_number!,
-                      status: s.status!,
+                      id: s.id,
+                      fullName: s.full_name,
+                      studentNumber: s.student_number,
+                      status: s.status,
                       blockedReason: s.blocked_reason,
                     }}
                   />

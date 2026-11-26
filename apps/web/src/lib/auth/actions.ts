@@ -1,5 +1,6 @@
 'use server';
 
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { ActorType } from '@calc-rental/shared';
@@ -7,13 +8,10 @@ import { writeAuditLog } from '@/lib/audit';
 import { safeNextPath } from '@/lib/auth/redirect';
 import { readPublicEnv } from '@/lib/env';
 import { readServerEnv } from '@/lib/env.server';
+import { LOCAL_SESSION_COOKIE, revokeLocalSession, signInLocalAdmin } from '@/lib/local-db';
+import { isLocalBackend } from '@/lib/mode';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-
-/**
- * Server Actions for signing in and out. They run ONLY on the server;
- * the browser just posts the form.
- */
 
 export interface LoginState {
   error: string | null;
@@ -28,10 +26,6 @@ const LoginSchema = z.object({
 });
 
 export async function signIn(_previous: LoginState, formData: FormData): Promise<LoginState> {
-  if (!readPublicEnv() || !readServerEnv()) {
-    return { error: 'The server is not configured yet. Check apps/web/.env.local.' };
-  }
-
   const parsed = LoginSchema.safeParse({
     email: formData.get('email'),
     password: formData.get('password'),
@@ -48,11 +42,58 @@ export async function signIn(_previous: LoginState, formData: FormData): Promise
   }
 
   const { email, password, next } = parsed.data;
+
+  if (isLocalBackend()) {
+    const outcome = signInLocalAdmin(email, password);
+    if (!outcome.ok) {
+      if (outcome.reason === 'inactive') {
+        await writeAuditLog({
+          actorType: ActorType.ADMIN,
+          actorId: outcome.admin.id,
+          actorLabel: email,
+          action: 'LOGIN_REJECTED_INACTIVE',
+          targetType: 'local_admin',
+          targetId: outcome.admin.id,
+        });
+        return {
+          error: 'Your account has not been activated yet. Ask a Super Admin to activate it.',
+          email: submittedEmail,
+        };
+      }
+      return { error: 'Invalid email or password.', email: submittedEmail };
+    }
+
+    const cookieStore = await cookies();
+    const useSecureCookie = process.env.APP_URL?.startsWith('https://') ?? false;
+    cookieStore.set(LOCAL_SESSION_COOKIE, outcome.sessionToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: useSecureCookie,
+      path: '/',
+      expires: outcome.expiresAt,
+    });
+
+    await writeAuditLog({
+      actorType: ActorType.ADMIN,
+      actorId: outcome.admin.id,
+      actorLabel: outcome.admin.email,
+      action: 'LOGIN',
+      targetType: 'local_admin',
+      targetId: outcome.admin.id,
+      newValue: { role: outcome.admin.role, mode: 'local' },
+    });
+
+    redirect(safeNextPath(next));
+  }
+
+  if (!readPublicEnv() || !readServerEnv()) {
+    return { error: 'The server is not configured yet. Check apps/web/.env.local.' };
+  }
+
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error || !data.user) {
-    // Same message for "no such user" and "wrong password": don't reveal which emails exist.
     const tooMany = error?.status === 429;
     return {
       error: tooMany ? 'Too many attempts. Wait a minute and try again.' : 'Invalid email or password.',
@@ -60,7 +101,6 @@ export async function signIn(_previous: LoginState, formData: FormData): Promise
     };
   }
 
-  // Signed in with Supabase — but is this person an ACTIVE admin?
   const { data: profile } = await supabase
     .from('profiles')
     .select('role, is_active')
@@ -99,6 +139,24 @@ export async function signIn(_previous: LoginState, formData: FormData): Promise
 }
 
 export async function signOut(): Promise<void> {
+  if (isLocalBackend()) {
+    const cookieStore = await cookies();
+    const rawToken = cookieStore.get(LOCAL_SESSION_COOKIE)?.value;
+    const admin = revokeLocalSession(rawToken);
+    cookieStore.delete(LOCAL_SESSION_COOKIE);
+    if (admin) {
+      await writeAuditLog({
+        actorType: ActorType.ADMIN,
+        actorId: admin.id,
+        actorLabel: admin.email,
+        action: 'LOGOUT',
+        targetType: 'local_admin',
+        targetId: admin.id,
+      });
+    }
+    redirect('/login');
+  }
+
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase.auth.getClaims();
   const claims = data?.claims;

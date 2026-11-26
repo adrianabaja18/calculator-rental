@@ -4,6 +4,9 @@
   "private": true,
   "description": "Admin dashboard and backend API (Next.js route handlers) for the calculator rental locker.",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "next dev --port 3000",
     "build": "next build",

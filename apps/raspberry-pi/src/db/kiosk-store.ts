@@ -449,21 +449,22 @@ export class KioskStore {
     const status = penaltyStatus(due, penalty.amount_paid_centavos, penalty.waived_centavos);
     const row = {
       ...penalty,
+      calculated_at: penalty.updated_at,
       amount_due_centavos: due,
       status,
       paid_at: status === 'PAID' ? (penalty.paid_at ?? penalty.updated_at) : penalty.paid_at,
     };
     this.db
       .prepare(
-        `INSERT INTO penalties (id, rental_id, student_id, reason, overdue_minutes, calculated_centavos, amount_paid_centavos, waived_centavos, amount_due_centavos, status, paid_at, updated_at)
-         VALUES (@id, @rental_id, @student_id, @reason, @overdue_minutes, @calculated_centavos, @amount_paid_centavos, @waived_centavos, @amount_due_centavos, @status, @paid_at, @updated_at)
+        `INSERT INTO penalties (id, rental_id, student_id, reason, overdue_minutes, calculated_centavos, amount_paid_centavos, waived_centavos, amount_due_centavos, status, calculated_at, paid_at, updated_at)
+         VALUES (@id, @rental_id, @student_id, @reason, @overdue_minutes, @calculated_centavos, @amount_paid_centavos, @waived_centavos, @amount_due_centavos, @status, @calculated_at, @paid_at, @updated_at)
          ON CONFLICT(id) DO UPDATE SET overdue_minutes = excluded.overdue_minutes, calculated_centavos = excluded.calculated_centavos,
            amount_paid_centavos = excluded.amount_paid_centavos, waived_centavos = excluded.waived_centavos,
            amount_due_centavos = excluded.amount_due_centavos, status = excluded.status, paid_at = excluded.paid_at,
            updated_at = excluded.updated_at`,
       )
       .run(row);
-    if (options.enqueue) this.enqueue('penalty', row.id, row);
+    if (options.enqueue) this.enqueue('penalty', row.id, this.db.prepare('SELECT * FROM penalties WHERE id = ?').get(row.id));
     return row as PenaltyRecord;
   }
 
@@ -594,6 +595,39 @@ export class KioskStore {
   /** Synced rows are kept a while for troubleshooting, then removed (SD card space). */
   pruneSynced(beforeIso: string): number {
     return this.db.prepare('DELETE FROM sync_queue WHERE synced_at IS NOT NULL AND synced_at < ?').run(beforeIso).changes;
+  }
+
+  // ---------------------------------------------------------------- local commands (SQLite dashboard -> kiosk)
+  claimLocalCommands(nowIso: string): Array<{ id: string; command: 'UNLOCK_LOCKER' | 'REFRESH'; payload: Record<string, unknown> }> {
+    return this.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE device_commands
+           SET status = 'EXPIRED', completed_at = ?, result_message = 'The kiosk did not pick it up in time.'
+           WHERE status IN ('PENDING', 'SENT') AND expires_at < ?`,
+        )
+        .run(nowIso, nowIso);
+
+      const pending = this.db
+        .prepare(`SELECT id, command, payload FROM device_commands WHERE status = 'PENDING' ORDER BY requested_at ASC LIMIT 10`)
+        .all() as Array<{ id: string; command: 'UNLOCK_LOCKER' | 'REFRESH'; payload: string }>;
+
+      if (pending.length === 0) return [];
+      const markSent = this.db.prepare(`UPDATE device_commands SET status = 'SENT', sent_at = ? WHERE id = ?`);
+      for (const row of pending) markSent.run(nowIso, row.id);
+
+      return pending.map((row) => ({
+        id: row.id,
+        command: row.command,
+        payload: JSON.parse(row.payload) as Record<string, unknown>,
+      }));
+    });
+  }
+
+  completeLocalCommand(id: string, status: 'DONE' | 'FAILED', message: string, nowIso: string): void {
+    this.db
+      .prepare(`UPDATE device_commands SET status = ?, completed_at = ?, result_message = ? WHERE id = ?`)
+      .run(status, nowIso, message.slice(0, 300), id);
   }
 
   /** Each locker's latest sensor state, for the heartbeat. */

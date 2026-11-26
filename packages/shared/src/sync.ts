@@ -25,13 +25,18 @@ import {
 
 export const SYNC_ENTITIES = [
   'student',
+  'student_admin',
   'rental',
   'payment',
   'penalty',
   'coin_event',
   'device_event',
   'locker_state',
+  'locker',
   'calculator_state',
+  'calculator',
+  'settings',
+  'audit_log',
 ] as const;
 export type SyncEntity = (typeof SYNC_ENTITIES)[number];
 

@@ -6,9 +6,10 @@ import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { FilterBar } from '@/components/ui/filter-bar';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryPenalties } from '@/lib/data/queries';
 import { formatDateTime, formatPeso } from '@/lib/format';
+import { isDashboardReadOnly } from '@/lib/mode';
 import { humanize, toneFor } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { WaivePenaltyButton } from './penalty-actions';
 
 export const metadata: Metadata = { title: 'Penalties' };
@@ -19,20 +20,11 @@ const STATUSES = Object.values(PenaltyStatus);
 
 export default async function PenaltiesPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const admin = await requireAdmin();
-  const canWaive = hasRole(admin.role, AdminRole.OFFICER);
+  const canWaive = hasRole(admin.role, AdminRole.OFFICER) && !isDashboardReadOnly();
   const params = await searchParams;
   const status = (STATUSES as string[]).includes(params.status ?? '') ? (params.status as PenaltyStatus) : '';
 
-  const supabase = await createSupabaseServerClient();
-  let query = supabase
-    .from('penalties')
-    .select('*, students(full_name, student_number), rental_transactions(transaction_code)')
-    .order('created_at', { ascending: false })
-    .limit(PAGE_LIMIT);
-  if (status) query = query.eq('status', status);
-  const { data: penalties, error } = await query;
-  if (error) throw new Error('Failed to load penalties');
-
+  const penalties = await queryPenalties({ status, limit: PAGE_LIMIT });
   const outstanding = penalties.reduce((sum, p) => sum + Number(p.amount_due), 0);
   const columns = canWaive ? 8 : 7;
 
@@ -66,10 +58,10 @@ export default async function PenaltiesPage({ searchParams }: { searchParams: Pr
               <tr key={p.id} className={open ? 'bg-red-50/40' : 'hover:bg-slate-50'}>
                 <Td className="whitespace-nowrap">{formatDateTime(p.calculated_at)}</Td>
                 <Td>
-                  {p.students?.full_name ?? '—'}
-                  <Sub>{p.students?.student_number}</Sub>
+                  {p.student_full_name ?? '—'}
+                  <Sub>{p.student_number}</Sub>
                 </Td>
-                <Td className="whitespace-nowrap">{p.rental_transactions?.transaction_code ?? '—'}</Td>
+                <Td className="whitespace-nowrap">{p.transaction_code ?? '—'}</Td>
                 <Td className="text-right tabular-nums">{late}</Td>
                 <Td className="text-right tabular-nums">{formatPeso(p.calculated_amount)}</Td>
                 <Td className="text-right tabular-nums">
@@ -84,7 +76,7 @@ export default async function PenaltiesPage({ searchParams }: { searchParams: Pr
                   <Td className="text-right">
                     {open && (
                       <WaivePenaltyButton
-                        penalty={{ id: p.id, owed: formatPeso(p.amount_due), studentName: p.students?.full_name ?? 'this student' }}
+                        penalty={{ id: p.id, owed: formatPeso(p.amount_due), studentName: p.student_full_name ?? 'this student' }}
                       />
                     )}
                   </Td>

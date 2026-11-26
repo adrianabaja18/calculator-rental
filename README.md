@@ -10,6 +10,7 @@ Students scan their school-ID QR code at the kiosk, pay with coins, and the Rasp
 | Document | Contents |
 |---|---|
 | [docs/onboarding.md](docs/onboarding.md) | Team onboarding, project status, setup, workflow, pending decisions |
+| [docs/raspberry-pi-local-setup.md](docs/raspberry-pi-local-setup.md) | **Local-first Raspberry Pi 4 setup**, local admin login credentials, offline clock sync, and read-only cloud sync |
 | [docs/architecture.md](docs/architecture.md) | System architecture and design decisions |
 | [docs/database.md](docs/database.md) | Schema, ER diagram, rules enforced by the database, RLS |
 | [docs/raspberry-pi.md](docs/raspberry-pi.md) | Hardware wiring plan (GPIO map, power, component notes) |

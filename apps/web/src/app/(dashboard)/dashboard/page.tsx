@@ -4,8 +4,9 @@ import { HealthPanel } from '@/components/health-panel';
 import { LiveRefresh } from '@/components/live-refresh';
 import { PageHeader } from '@/components/page-header';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryDashboardSummary } from '@/lib/data/queries';
 import { formatPeso } from '@/lib/format';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { isDashboardReadOnly } from '@/lib/mode';
 
 export const metadata: Metadata = { title: 'Dashboard' };
 
@@ -34,15 +35,14 @@ function Card({ title, value, href, tone = 'default' }: { title: string; value: 
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ denied?: string }> }) {
   const admin = await requireAdmin();
   const { denied } = await searchParams;
-  const supabase = await createSupabaseServerClient();
-  const { data: s, error } = await supabase.from('v_dashboard_summary').select('*').single();
-  if (error || !s) throw new Error('Failed to load dashboard summary');
+  const s = await queryDashboardSummary();
+  const readOnly = isDashboardReadOnly();
 
   return (
     <>
       <PageHeader
         title="Dashboard"
-        description={`Welcome${admin.fullName ? `, ${admin.fullName}` : ''}. "Today" follows Philippine time.`}
+        description={`Welcome${admin.fullName ? `, ${admin.fullName}` : ''}. "Today" follows Philippine time.${readOnly ? ' Viewing online read-only mirror synced from the Raspberry Pi.' : ''}`}
         actions={<LiveRefresh tables={LIVE_TABLES} />}
       />
 
@@ -53,12 +53,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       )}
 
       <section aria-label="Summary" className="mb-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card title="Total Calculators" value={s.total_calculators ?? 0} href="/calculators" />
-        <Card title="Available" value={s.available_calculators ?? 0} href="/calculators?status=AVAILABLE" tone="green" />
-        <Card title="Currently Rented" value={s.rented_calculators ?? 0} href="/rentals" tone="blue" />
-        <Card title="Overdue" value={s.overdue_rentals ?? 0} href="/rentals" tone={s.overdue_rentals ? 'red' : 'default'} />
-        <Card title="Rentals Today" value={s.rentals_today ?? 0} href="/transactions" />
-        <Card title="Returns Today" value={s.returns_today ?? 0} href="/transactions" />
+        <Card title="Total Calculators" value={s.total_calculators} href="/calculators" />
+        <Card title="Available" value={s.available_calculators} href="/calculators?status=AVAILABLE" tone="green" />
+        <Card title="Currently Rented" value={s.rented_calculators} href="/rentals" tone="blue" />
+        <Card title="Overdue" value={s.overdue_rentals} href="/rentals" tone={s.overdue_rentals ? 'red' : 'default'} />
+        <Card title="Rentals Today" value={s.rentals_today} href="/transactions" />
+        <Card title="Returns Today" value={s.returns_today} href="/transactions" />
         <Card title="Income Today" value={formatPeso(s.income_today)} href="/payments" />
         <Card
           title="Outstanding Penalties"

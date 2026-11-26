@@ -4,20 +4,9 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { AdminRole, hasRole } from '@calc-rental/shared';
 import { readPublicEnv } from '@/lib/env';
+import { LOCAL_SESSION_COOKIE, getLocalSessionAdmin } from '@/lib/local-db';
+import { isLocalBackend } from '@/lib/mode';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-
-/**
- * Data Access Layer for authentication — the REAL security check.
- *
- * src/proxy.ts only does a fast, optimistic "is there a session cookie?"
- * redirect. Every protected page, Server Action and admin API must call
- * requireAdmin() here, which:
- *   1. verifies the JWT with Supabase (getClaims), and
- *   2. loads the admin's profile from the database (role + is_active).
- *
- * `cache()` makes it run at most once per request even if many
- * components ask for the current admin.
- */
 
 export interface CurrentAdmin {
   id: string;
@@ -29,9 +18,21 @@ export interface CurrentAdmin {
 
 /** Returns the signed-in user's admin profile, or null if not signed in. */
 export const getCurrentAdmin = cache(async (): Promise<CurrentAdmin | null> => {
-  // Mark the request as dynamic before anything else (see supabase/server.ts).
-  await cookies();
-  // Server not configured (fresh clone, CI build): nobody can be signed in.
+  const cookieStore = await cookies();
+
+  if (isLocalBackend()) {
+    const rawToken = cookieStore.get(LOCAL_SESSION_COOKIE)?.value;
+    const localAdmin = getLocalSessionAdmin(rawToken);
+    if (!localAdmin) return null;
+    return {
+      id: localAdmin.id,
+      email: localAdmin.email,
+      fullName: localAdmin.full_name,
+      role: localAdmin.role,
+      isActive: localAdmin.is_active === 1,
+    };
+  }
+
   if (!readPublicEnv()) return null;
 
   const supabase = await createSupabaseServerClient();
@@ -39,7 +40,6 @@ export const getCurrentAdmin = cache(async (): Promise<CurrentAdmin | null> => {
   const userId = claimsData?.claims?.sub;
   if (claimsError || !userId) return null;
 
-  // RLS lets every signed-in user read their OWN profile row.
   const { data: profile } = await supabase
     .from('profiles')
     .select('id, email, full_name, role, is_active')

@@ -2,22 +2,55 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { isLocalBackend } from '@/lib/mode';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 
 type Status = 'connecting' | 'live' | 'paused';
 
 /**
- * Keeps a server-rendered page up to date (spec §23) without a full reload:
- * listens to Supabase Realtime changes on `tables` and re-renders the page
- * (router.refresh) at most every 500 ms. RLS applies to Realtime too, so
- * only active admins receive changes.
+ * Keeps a server-rendered page up to date without a full reload:
+ * - Local Raspberry Pi mode: polls `/api/local/live` every 2.5 s while visible.
+ * - Online Supabase mode: subscribes to Supabase Realtime changes on `tables`.
  */
 export function LiveRefresh({ tables }: { tables: readonly string[] }) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>('connecting');
   const key = tables.join(',');
+  const local = isLocalBackend();
 
   useEffect(() => {
+    if (local) {
+      let cancelled = false;
+      let lastToken: string | null = null;
+
+      const poll = async () => {
+        if (cancelled || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return;
+        try {
+          const res = await fetch('/api/local/live', { cache: 'no-store' });
+          if (!res.ok) {
+            if (!cancelled) setStatus('paused');
+            return;
+          }
+          const data = (await res.json()) as { token?: string };
+          if (cancelled) return;
+          setStatus('live');
+          if (lastToken !== null && data.token && data.token !== lastToken) {
+            router.refresh();
+          }
+          if (data.token) lastToken = data.token;
+        } catch {
+          if (!cancelled) setStatus('paused');
+        }
+      };
+
+      void poll();
+      const interval = setInterval(() => void poll(), 2500);
+      return () => {
+        cancelled = true;
+        clearInterval(interval);
+      };
+    }
+
     const supabase = createSupabaseBrowserClient();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
@@ -38,9 +71,9 @@ export function LiveRefresh({ tables }: { tables: readonly string[] }) {
       clearTimeout(timer);
       void supabase.removeChannel(channel);
     };
-  }, [key, router]);
+  }, [key, local, router]);
 
-  const label = { connecting: 'Connecting…', live: 'Live', paused: 'Live updates paused' }[status];
+  const label = { connecting: 'Connecting…', live: local ? 'Live (Local)' : 'Live', paused: 'Live updates paused' }[status];
   const dot = { connecting: 'bg-slate-400', live: 'bg-emerald-500', paused: 'bg-amber-500' }[status];
 
   return (

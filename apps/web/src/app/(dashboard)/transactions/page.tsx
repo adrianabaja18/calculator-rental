@@ -6,9 +6,9 @@ import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { FilterBar } from '@/components/ui/filter-bar';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryTransactions } from '@/lib/data/queries';
 import { cleanSearch, formatDateTime, formatPeso } from '@/lib/format';
 import { humanize, toneFor } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 export const metadata: Metadata = { title: 'Transactions' };
 
@@ -22,16 +22,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
   const q = cleanSearch(params.q);
   const status = (STATUSES as string[]).includes(params.status ?? '') ? (params.status as RentalStatus) : '';
 
-  const supabase = await createSupabaseServerClient();
-  let query = supabase.from('v_rentals').select('*').order('created_at', { ascending: false }).limit(PAGE_LIMIT);
-  if (q) {
-    query = query.or(
-      `transaction_code.ilike.%${q}%,student_full_name.ilike.%${q}%,student_number.ilike.%${q}%,calculator_code.ilike.%${q}%`,
-    );
-  }
-  if (status) query = query.eq('status', status);
-  const { data: rentals, error } = await query;
-  if (error) throw new Error('Failed to load transactions');
+  const rentals = await queryTransactions({ q, status, limit: PAGE_LIMIT });
 
   return (
     <>
@@ -62,7 +53,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
         </thead>
         <tbody className="divide-y divide-slate-100">
           {rentals.length === 0 && (
-            <EmptyRow colSpan={9} title={q || status ? 'No transactions match your filters' : 'No transactions yet'} hint="Rentals appear after the kiosk syncs." />
+            <EmptyRow colSpan={9} title={q || status ? 'No transactions match your filters' : 'No transactions yet'} hint="Rentals appear as students use the kiosk." />
           )}
           {rentals.map((r) => (
             <tr key={r.id} className={r.effective_status === 'OVERDUE' ? 'bg-red-50/50' : 'hover:bg-slate-50'}>

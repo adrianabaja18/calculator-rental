@@ -5,9 +5,9 @@ import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { FilterBar } from '@/components/ui/filter-bar';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryAuditLogs } from '@/lib/data/queries';
 import { cleanSearch, formatDateTime } from '@/lib/format';
 import { humanize } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 export const metadata: Metadata = { title: 'Audit Logs' };
 
@@ -30,12 +30,7 @@ export default async function AuditLogsPage({ searchParams }: { searchParams: Pr
   const q = cleanSearch(params.q);
   const actor = (ACTORS as string[]).includes(params.status ?? '') ? (params.status as ActorType) : '';
 
-  const supabase = await createSupabaseServerClient();
-  let query = supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(PAGE_LIMIT);
-  if (q) query = query.or(`action.ilike.%${q.replace(/ /g, '_')}%,actor_label.ilike.%${q}%,target_type.ilike.%${q}%,reason.ilike.%${q}%`);
-  if (actor) query = query.eq('actor_type', actor);
-  const { data: logs, error } = await query;
-  if (error) throw new Error('Failed to load audit logs');
+  const logs = await queryAuditLogs({ q, actor, limit: PAGE_LIMIT });
 
   return (
     <>
@@ -79,7 +74,7 @@ export default async function AuditLogsPage({ searchParams }: { searchParams: Pr
               </Td>
               <Td>{log.reason ?? '—'}</Td>
               <Td>
-                {log.previous_value || log.new_value ? (
+                {Boolean(log.previous_value || log.new_value) ? (
                   <details>
                     <summary className="cursor-pointer text-xs text-slate-500">Show</summary>
                     <Json label="Before" value={log.previous_value} />

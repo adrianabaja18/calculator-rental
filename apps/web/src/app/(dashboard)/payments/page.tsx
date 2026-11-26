@@ -6,9 +6,9 @@ import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { FilterBar } from '@/components/ui/filter-bar';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryPayments } from '@/lib/data/queries';
 import { formatDateTime, formatPeso } from '@/lib/format';
 import { humanize, toneFor } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 export const metadata: Metadata = { title: 'Payments' };
 
@@ -23,16 +23,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
   const status = (STATUSES as string[]).includes(params.status ?? '') ? (params.status as PaymentStatus) : '';
   const type = (TYPES as string[]).includes(params.type ?? '') ? (params.type as PaymentType) : '';
 
-  const supabase = await createSupabaseServerClient();
-  let query = supabase
-    .from('payments')
-    .select('*, students(full_name, student_number), rental_transactions(transaction_code)')
-    .order('created_at', { ascending: false })
-    .limit(PAGE_LIMIT);
-  if (status) query = query.eq('status', status);
-  if (type) query = query.eq('payment_type', type);
-  const { data: payments, error } = await query;
-  if (error) throw new Error('Failed to load payments');
+  const payments = await queryPayments({ status, type, limit: PAGE_LIMIT });
 
   const collected = payments.filter((p) => p.status === 'PAID').reduce((sum, p) => sum + Number(p.amount_received), 0);
   const over = payments.reduce((sum, p) => sum + Math.max(0, Number(p.amount_received) - Number(p.required_amount)), 0);
@@ -63,7 +54,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {payments.length === 0 && <EmptyRow colSpan={6} title="No payments match" hint="Payments appear after the kiosk syncs." />}
+          {payments.length === 0 && <EmptyRow colSpan={6} title="No payments match" hint="Payments appear as coins are accepted at the kiosk." />}
           {payments.map((p) => {
             const overpaid = Number(p.amount_received) - Number(p.required_amount);
             return (
@@ -73,12 +64,12 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
                   {p.paid_at && <Sub>paid {formatDateTime(p.paid_at)}</Sub>}
                 </Td>
                 <Td>
-                  {p.students?.full_name ?? '—'}
-                  <Sub>{p.students?.student_number}</Sub>
+                  {p.student_full_name ?? '—'}
+                  <Sub>{p.student_number}</Sub>
                 </Td>
                 <Td>
                   {humanize(p.payment_type)} · {humanize(p.method)}
-                  <Sub>{p.rental_transactions?.transaction_code}</Sub>
+                  <Sub>{p.transaction_code}</Sub>
                 </Td>
                 <Td>
                   <StatusBadge tone={toneFor(p.status)}>{humanize(p.status)}</StatusBadge>

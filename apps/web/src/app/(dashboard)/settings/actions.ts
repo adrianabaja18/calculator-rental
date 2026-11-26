@@ -5,9 +5,13 @@ import { ActorType, AdminRole, SystemSettingsSchema, systemSettingsFromRow, type
 import { actionFail, actionFromDbError, actionFromZodError, actionOk, type ActionResult } from '@/lib/action-result';
 import { writeAuditLog } from '@/lib/audit';
 import { requireAdmin } from '@/lib/auth/session';
+import { querySystemSettings } from '@/lib/data/queries';
+import { enqueueLocalSync, getLocalDb } from '@/lib/local-db';
+import { isDashboardReadOnly, isLocalBackend } from '@/lib/mode';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
-/** Reads the Settings form into the shape SystemSettingsSchema validates. */
+const READ_ONLY_MSG = 'The online monitoring dashboard is read-only. Edit settings on the local Raspberry Pi dashboard.';
+
 function readForm(fd: FormData) {
   const num = (k: string) => Number(fd.get(k));
   const on = (k: string) => fd.get(k) === 'on';
@@ -78,15 +82,48 @@ function toRow(s: SystemSettings) {
 
 export async function updateSettings(_previous: ActionResult, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin(AdminRole.SUPER_ADMIN);
+  if (isDashboardReadOnly()) return actionFail(READ_ONLY_MSG);
+
   const parsed = SystemSettingsSchema.safeParse(readForm(formData));
   if (!parsed.success) return actionFromZodError(parsed.error);
+
+  if (isLocalBackend()) {
+    const { settings: before } = await querySystemSettings();
+    const changedKeys = (Object.keys(parsed.data) as (keyof SystemSettings)[]).filter(
+      (k) => JSON.stringify(before[k]) !== JSON.stringify(parsed.data[k]),
+    );
+    if (changedKeys.length === 0) return actionOk('Nothing changed.');
+
+    const db = getLocalDb();
+    const nowIso = new Date().toISOString();
+    const dataJson = JSON.stringify(parsed.data);
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO settings (id, data, updated_at) VALUES (1, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+      ).run(dataJson, nowIso);
+      enqueueLocalSync(db, 'settings', '1', parsed.data);
+    })();
+
+    await writeAuditLog({
+      actorType: ActorType.ADMIN,
+      actorId: admin.id,
+      actorLabel: admin.email,
+      action: 'SETTINGS_UPDATED',
+      targetType: 'system_settings',
+      targetId: '1',
+      previousValue: Object.fromEntries(changedKeys.map((k) => [k, before[k]])),
+      newValue: Object.fromEntries(changedKeys.map((k) => [k, parsed.data[k]])),
+    });
+    revalidatePath('/settings');
+    return actionOk(`Settings saved locally (${changedKeys.length} change${changedKeys.length === 1 ? '' : 's'}). Active immediately on the kiosk.`);
+  }
 
   const db = createSupabaseAdminClient();
   const { data: row } = await db.from('system_settings').select('*').eq('id', 1).single();
   if (!row) return actionFail('Settings row is missing.');
   const before = systemSettingsFromRow(row);
 
-  // Audit only what changed.
   const changedKeys = (Object.keys(parsed.data) as (keyof SystemSettings)[]).filter(
     (k) => JSON.stringify(before[k]) !== JSON.stringify(parsed.data[k]),
   );
@@ -109,5 +146,5 @@ export async function updateSettings(_previous: ActionResult, formData: FormData
     newValue: Object.fromEntries(changedKeys.map((k) => [k, parsed.data[k]])),
   });
   revalidatePath('/settings');
-  return actionOk(`Settings saved (${changedKeys.length} change${changedKeys.length === 1 ? '' : 's'}). The kiosk applies them on its next sync.`);
+  return actionOk(`Settings saved (${changedKeys.length} change${changedKeys.length === 1 ? '' : 's'}).`);
 }
