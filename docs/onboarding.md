@@ -30,6 +30,8 @@ Officers watch everything on a **web dashboard**.
 
 The deeper design is in [architecture.md](architecture.md), [database.md](database.md) and [raspberry-pi.md](raspberry-pi.md).
 
+**Building the physical kiosk?** Follow **[physical-build-handoff.md](physical-build-handoff.md)**: stage by stage from parts to a working kiosk, with a sign-off table.
+
 ---
 
 ## 2. Project status
