@@ -42,7 +42,11 @@ const ConfigSchema = z.object({
     .default('dev-only-placeholder-secret-change-me'),
   SQLITE_PATH: z.string().min(1).default('./data/kiosk.db'),
   HARDWARE_MODE: z.enum(['mock', 'real']).default('mock'),
-  QR_SCANNER: z.enum(['mock', 'serial']).default('mock'),
+  /**
+   * phone  = students send their ID from their phone (the Pi's /scan page; kiosk shows a code);
+   * mock   = keyboard console; serial = the retired ESP32-CAM on SCANNER_PORT.
+   */
+  QR_SCANNER: z.enum(['phone', 'mock', 'serial']).default('mock'),
   SCANNER_PORT: z.string().min(1).default('/dev/ttyUSB0'),
   // ---- Real hardware (HARDWARE_MODE=real). Pins are BCM numbers. ----
   PYTHON_BIN: z.string().min(1).default(process.platform === 'win32' ? 'python' : 'python3'),

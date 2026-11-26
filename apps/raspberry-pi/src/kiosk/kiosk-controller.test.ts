@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DoorState, RentalStatus } from '@calc-rental/shared';
+import { startScanSession, submitScan, takeScan } from '@calc-rental/shared/sqlite';
 import { DEV_IDS, DEV_RFID, DEV_SETTINGS, seedDevData } from '../db/dev-seed';
 import { KioskStore } from '../db/kiosk-store';
 import { openLocalDatabase } from '../db/sqlite';
@@ -7,7 +8,7 @@ import { createMockHardware, type MockHardware } from '../hardware/mock';
 import { PaymentService } from '../payment/payment-service';
 import { RentalService } from '../rental/rental-service';
 import { ReturnService } from '../rental/return-service';
-import { KioskController } from './kiosk-controller';
+import { KioskController, type PhoneScan } from './kiosk-controller';
 import { KioskState, canMove } from './kiosk-states';
 
 // Fake identities only.
@@ -33,7 +34,7 @@ const coin = (pesos: number, id = `c${pesos}-${Math.random()}`) =>
   kiosk.handleCoin({ eventId: id, pulseCount: pesos, occurredAt: clock.toISOString() });
 const rentalStatus = () => (store.db.prepare(`SELECT status FROM rentals`).get() as { status: string } | undefined)?.status;
 
-async function boot(options: { clockSynced?: boolean; sleepAfterMs?: number } = {}) {
+async function boot(options: { clockSynced?: boolean; sleepAfterMs?: number; phoneScan?: PhoneScan } = {}) {
   store = new KioskStore(openLocalDatabase(':memory:'));
   clock = new Date('2026-10-20T02:00:00.000Z'); // 10:00 AM Manila
   seedDevData(store, { sensorsReady: false, nowIso: clock.toISOString() });
@@ -45,7 +46,12 @@ async function boot(options: { clockSynced?: boolean; sleepAfterMs?: number } = 
   const rentals = new RentalService(store, { deviceCode: 'DEVICE-CALC-KIOSK-001', now });
   const payments = new PaymentService(store, rentals, { now });
   const returns = new ReturnService(store, payments, { now });
-  kiosk = new KioskController(store, hw, { rentals, payments, returns }, { now, messageMs: 3 * SECOND, sleepAfterMs: options.sleepAfterMs });
+  kiosk = new KioskController(store, hw, { rentals, payments, returns }, {
+    now,
+    messageMs: 3 * SECOND,
+    sleepAfterMs: options.sleepAfterMs,
+    phoneScan: options.phoneScan,
+  });
   await kiosk.start(); // no tick: the first scan must already see the calculators
 }
 
@@ -549,5 +555,90 @@ describe('fault handling', () => {
     });
     await advance(3 * SECOND);
     expect(kiosk.state).toBe(KioskState.SYSTEM_READY);
+  });
+});
+
+describe('phone ID scanning (no camera at the kiosk)', () => {
+  /** The real scan-session functions on the kiosk's SQLite, as index.ts wires them. */
+  const phoneScan = (): PhoneScan => ({
+    start: (now) => startScanSession(store.db, now),
+    take: (id, now) => takeScan(store.db, id, now),
+  });
+  /** The student's phone: reads the code off the LCD and sends the ID (what /api/scan does). */
+  const sendFromPhone = (qr: string, code = /CODE (\d{6})/.exec(lcd()[1] ?? '')?.[1] ?? '000000') =>
+    submitScan(store.db, { code, qr, clientHash: 'test-phone' }, clock);
+  const codeLine = () => lcd()[1]!.replace(/\d{6}/, '######');
+
+  beforeEach(() => boot({ phoneScan: phoneScan(), sleepAfterMs: 120 * SECOND }));
+
+  it('idle screen asks for a button press', () => {
+    expect(lcd()).toEqual(['PRESS TO START', '1:READY 2:READY']);
+  });
+
+  it('any button shows a code; the ID sent from the phone continues the normal borrow flow', async () => {
+    await red(2);
+    expect(kiosk.state).toBe(KioskState.WAITING_FOR_PHONE);
+    expect(lcd()[0]).toBe('SCAN ID ON PHONE');
+    expect(codeLine()).toBe('CODE ###### 1:55');
+
+    await advance(2 * SECOND);
+    expect(codeLine()).toBe('CODE ###### 1:53');
+    await blue(1); // pressing again while the code is up does nothing
+    expect(store.db.prepare(`SELECT count(*) AS n FROM scan_sessions`).get()).toEqual({ n: 1 });
+
+    expect(sendFromPhone(JUAN)).toBe('OK');
+    await advance(SECOND);
+    expect(kiosk.state).toBe(KioskState.SELECTING_LOCKER);
+    expect(lcd()).toEqual(['PUSH BLUE BUTTON', '1:READY 2:READY']);
+
+    await blue(2); // now the blue button picks the locker
+    expect(kiosk.state).toBe(KioskState.WAITING_FOR_PAYMENT);
+    expect(lcd()).toEqual(['JUAN DELA CRUZ', 'P20 / 3 HOURS']);
+  });
+
+  it('a wrong code from the phone is refused and the kiosk keeps waiting', async () => {
+    await blue(1);
+    const shown = /CODE (\d{6})/.exec(lcd()[1]!)![1]!;
+    expect(sendFromPhone(JUAN, shown === '123456' ? '654321' : '123456')).toBe('BAD_CODE');
+    await advance(SECOND);
+    expect(kiosk.state).toBe(KioskState.WAITING_FOR_PHONE);
+  });
+
+  it('a student with a calculator out is taken to the return', async () => {
+    await kiosk.handleScan(JUAN); // (a local scan still works) borrow first
+    await blue(1);
+    await coin(20);
+    hw.rfid.place(1, null);
+    await advance(SECOND);
+    await red(1);
+    await advance(3 * SECOND);
+
+    await red(1);
+    sendFromPhone(JUAN);
+    await advance(SECOND);
+    expect(kiosk.state).toBe(KioskState.WAITING_FOR_RETURN);
+  });
+
+  it('the code runs out: TIME RAN OUT, then back to idle', async () => {
+    await blue(1);
+    await advance(116 * SECOND);
+    expect(lcd()).toEqual(['TIME RAN OUT', 'PRESS TO RETRY']);
+    await advance(3 * SECOND);
+    expect(lcd()).toEqual(['PRESS TO START', '1:READY 2:READY']);
+  });
+
+  it('asleep: the press wakes it AND shows a code', async () => {
+    await advance(121 * SECOND);
+    expect(kiosk.state).toBe(KioskState.SLEEPING);
+    await blue(1);
+    expect(hw.display.backlight).toBe(true);
+    expect(kiosk.state).toBe(KioskState.WAITING_FOR_PHONE);
+  });
+
+  it('after closing time the idle screen says press to return', async () => {
+    await boot({ phoneScan: phoneScan() }); // no power saving, so it stays awake
+    clock = new Date('2026-10-20T10:00:00.000Z'); // 6 PM Manila
+    await advance(SECOND);
+    expect(lcd()).toEqual(['PRESS TO RETURN', 'OPEN WED 9:00AM']);
   });
 });

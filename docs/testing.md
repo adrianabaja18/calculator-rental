@@ -11,7 +11,8 @@ npm test
 | `packages/shared` | Business rules: eligibility, availability, rental state machine, penalties, QR parsing, validation |
 | `supabase/tests` | The real migrations + seed in PGlite (Postgres in-process): constraints, RLS, views, enums match TypeScript |
 | `apps/raspberry-pi/src/rental`, `payment`, `db` | Kiosk services on SQLite: borrowing, coins, returns, penalties, migrations, crash recovery |
-| `apps/raspberry-pi/src/kiosk` | The state machine with simulated hardware: every LCD screen, buttons, timeouts, officer unlock |
+| `apps/raspberry-pi/src/kiosk` | The state machine with simulated hardware: every LCD screen, buttons, timeouts, officer unlock, phone scanning on real SQLite (code, countdown, wrong code, timeout) |
+| `packages/shared/src/scan-sessions.test.ts` | Phone-scan codes in SQLite: handed over once, expiry, a new code ends the old one, guess limit, no phone addresses stored |
 | `apps/raspberry-pi/src/hardware/real` | The Python hardware bridge in mock mode: relays, buttons, RFID, coins, LCD, restart after a crash |
 | `apps/raspberry-pi/src/sync` | Sync logic (back-off, offline, paging, waivers) and **real kiosk outbox → real Supabase migrations** |
 | `apps/raspberry-pi/src/full-system.test.ts` | **Whole-system scenarios**: kiosk + simulated hardware + sync + Supabase: offline day, late return, power cut, officer block/maintenance/price/unlock/waiver |
@@ -61,11 +62,15 @@ Run these in order on the assembled kiosk. Each step says what must happen. If o
 - [ ] Coins: ₱1, ₱5, ₱10, ₱20 (old and new designs) show `COIN: N pulse(s) = PN`.
 - [ ] Buttons: each of the 4 prints `BUTTON: BLUE/RED … for locker N` once per press.
 
-### 3.2 Kiosk flows (`npm run start:pi` with `HARDWARE_MODE=real`, `QR_SCANNER=serial`)
-- [ ] Boot: `PLEASE WAIT / SYNCING CLOCK`, then `SCAN STUDENT ID / 1:READY 2:READY`.
-- [ ] Borrow: scan an ID QR → `PUSH BLUE BUTTON` → blue → name and price → coins → the locker unlocks → take the calculator → `CLOSE THE DOOR / PUSH RED BUTTON` → close it, press red → it locks → `RENTAL SUCCESS / DUE AT …`.
+### 3.2 Kiosk flows (`npm run start:pi` with `HARDWARE_MODE=real`, `QR_SCANNER=phone`)
+"Send the ID" below means: press any kiosk button → `SCAN ID ON PHONE / CODE …` → on a phone, open the sticker link, scan or photograph the ID, type the code, **Send to kiosk**.
+- [ ] Boot: `PLEASE WAIT / SYNCING CLOCK`, then `PRESS TO START / 1:READY 2:READY`.
+- [ ] Phones: an Android and an iPhone both read a test ID from a photo, in normal light and in a dim spot.
+- [ ] Code left unused for 2 min → `TIME RAN OUT / PRESS TO RETRY`. A wrong code on the phone → "That code is wrong or has expired".
+- [ ] Pi's internet unplugged (Wi-Fi/hotspot still on) → borrowing with a phone still works.
+- [ ] Borrow: send the ID → `PUSH BLUE BUTTON` → blue → name and price → coins → the locker unlocks → take the calculator → `CLOSE THE DOOR / PUSH RED BUTTON` → close it, press red → it locks → `RENTAL SUCCESS / DUE AT …`.
 - [ ] The locker is really locked afterwards (pull the door).
-- [ ] Return on time: scan → that locker unlocks → put it back → red → `RETURN SUCCESS`, locked.
+- [ ] Return on time: send the ID → that locker unlocks → put it back → red → `RETURN SUCCESS`, locked.
 - [ ] Wrong calculator into the wrong locker → `WRONG CALCULATOR`, and the locker stays unlocked until fixed.
 - [ ] Red pressed with nothing inside → `CALCULATOR NOT DETECTED`.
 - [ ] Payment timeout (insert nothing for 2 min) → `PAYMENT TIMEOUT`, no locker opens.
@@ -74,18 +79,17 @@ Run these in order on the assembled kiosk. Each step says what must happen. If o
 - [ ] **Power cut mid-rental:** pay, then unplug the Pi before taking the calculator. After reboot it shows ready, the rental is FAILED and the payment is on the dashboard for a refund. No locker opens by itself.
 
 ### 3.3 Operating hours and power saving
-- [ ] **ESP32-CAM firmware 1.1.0** is flashed. The startup `hello` shows `"fw":"1.1.0"`. Sleep/wake by hand works (firmware README §6).
 - [ ] `hwcheck:pi`: `backlight off` / `backlight on` switch the LCD backlight. `rfidpower off` → `rfid` says NOT RESPONDING; `rfidpower on` → `rfid` reads tags again.
-- [ ] Leave the kiosk idle for 2 min. The LCD dims to `PRESS ANY BUTTON / TO START` and the ESP32-CAM gets noticeably cooler.
-- [ ] Press any button. The kiosk wakes (beep, `SCAN STUDENT ID`) and **a QR scan works within ~2 s**. Repeat 5 times.
+- [ ] Leave the kiosk idle for 2 min. The LCD dims to `PRESS ANY BUTTON / TO START`.
+- [ ] Press any button. The kiosk wakes (beep) and **shows a code straight away**. Repeat 5 times.
 - [ ] Insert a coin while asleep. It wakes and the coin is logged for refund.
-- [ ] After 5:00 PM (or set *Closes* earlier in Settings): `RETURNS ONLY`, borrowing gives `KIOSK CLOSED`, a return still works, and it sleeps after 30 s.
+- [ ] After 5:00 PM (or set *Closes* earlier in Settings): `PRESS TO RETURN`, borrowing gives `KIOSK CLOSED`, a return still works, and it sleeps after 30 s.
 - [ ] A rental after 2:00 PM shows `DUE <weekday> …` the next open day.
 - [ ] **Devices** shows *Power: Asleep* while sleeping and the CPU temperature stays under 75 °C in normal use.
 
 ### 3.4 With the dashboard (sync)
 - [ ] Rentals and returns appear on **Active Rentals / Transactions** within ~10 s.
 - [ ] **Devices** shows ONLINE, CPU temperature, both lockers' RFID and lock state.
-- [ ] Unplug the network cable, do a borrow, then plug it back in. It appears once, with nothing lost.
+- [ ] Send the ID, unplug the network cable while paying, finish the borrow, then plug it back in. It appears once, with nothing lost.
 - [ ] Block a student / set a locker to maintenance / change the price on the dashboard. The kiosk follows within ~1 min.
 - [ ] Emergency unlock from **Devices** opens the locker for 10 s (only when no student is using the kiosk).

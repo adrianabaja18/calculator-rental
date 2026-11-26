@@ -58,7 +58,8 @@
 | **SQLite** | The kiosk's **main operating database** (SQLite-first, decided 2026-11-16). Every rental, return, payment and event is written here first, so the kiosk works with or without internet, and is then synced to Supabase. |
 | **Raspberry Pi 4** | Main embedded controller. Runs the kiosk state machine and the rental/payment/return rules, and drives the LCD, relays, solenoids, RFID readers, coin selector and buzzer. Syncs with the backend over HTTPS. |
 | **Vercel** | Hosts the Next.js dashboard and API in production (Phase 15). |
-| **ESP32-CAM** | A dedicated QR scanner. Decodes the student-ID QR code and sends the **raw text** to the Pi over USB serial. It has no Wi-Fi credentials and no business logic. |
+| **Students' phones** | Since Phase 14d, the ID scanner. The `/scan` page decodes the student-ID QR **on the phone** and sends only the text, tied to a 6-digit code shown on the kiosk LCD (§3.10). |
+| **ESP32-CAM** | Retired in Phase 14d (image quality too low). It was a dedicated QR scanner on USB serial; the code remains as the `serial` scanner option. |
 
 ## 3. Key design decisions (recommended options)
 
@@ -90,6 +91,8 @@ With SQLite-first (§3.8), the rental, payment, return and penalty rules run **o
 Why not one global secret in `.env`? Per-device credentials can be revoked individually, are auditable per kiosk, and support adding a second kiosk later without code changes.
 
 ### 3.5 ESP32-CAM ↔ Pi: USB serial (UART) with newline-delimited JSON
+> Retired in Phase 14d: see §3.10.
+
 **Recommended over HTTP or WebSocket for the prototype.**
 - One USB cable gives both power and data (`/dev/ttyUSB0`).
 - No Wi-Fi on the ESP32, so no network credentials on it, lower power draw and no IP configuration.
@@ -171,6 +174,18 @@ The kiosk must keep working 24/7 even if the internet drops, so the **Pi's SQLit
 - A rental an officer resolved by hand (`resolved_by`) is never overwritten by the kiosk.
 
 **Failures:** if Supabase refuses an item, nothing after it is applied, and the kiosk retries it with back-off (10 s, 20 s, 40 s … up to 10 min). After 20 attempts the item is set aside (`failed_at`), a CRITICAL `SYNC_FAILED` event is logged, and the rest continue. The heartbeat reports `failedItems`, which marks the device DEGRADED on the dashboard. Synced outbox rows are deleted after 7 days.
+
+### 3.10 Phone ID scanning (Phase 14e, decided 2026-11-28)
+The kiosk has no camera. Because the web app runs **on the Pi** with the same SQLite file as the kiosk (local-first, see [raspberry-pi-local-setup.md](raspberry-pi-local-setup.md)), identification needs **no internet**, only the kiosk's LAN or Wi-Fi hotspot:
+1. **Kiosk** (any button at idle) → `startScanSession()` writes a random 6-digit code to `scan_sessions` (SQLite migration 7), valid 2 min. The LCD shows it with a countdown. A new code ends the previous one.
+2. **Phone** → `http://<pi-ip>:3000/scan` (public page, no login; opened from a printed sticker). The QR is decoded **on the phone** (BarcodeDetector, else jsQR with several sizes, a centre crop and a contrast boost). `POST /api/scan {code, qr}` → the web app parses the QR again (Rule 14) and calls `submitScan()`.
+3. **Kiosk** checks every 0.5 s with `takeScan()`, which hands the text over **once** (the row keeps it as a record of the scan); the kiosk then runs the normal borrow/return flow.
+
+All three functions live in `packages/shared/src/sqlite-node.ts`, so the kiosk and the web app use the same rules.
+
+Security: the code proves physical presence (only the LCD shows it); it is single-use and short-lived. Wrong codes are counted per phone (SHA-256 of its address with a per-Pi random salt; no addresses stored): 10 in 10 minutes → refused. The photo never leaves the phone; the QR text is **stored** in `scan_sessions` (team decision 2026-11-28) with when it was sent and whether the kiosk used it, listed on the dashboard's **ID Scans** page. The online (cloud) dashboard refuses `/api/scan`: scanning only happens on the Pi.
+
+Limit: phones only allow the **live** camera view on https. Over the Pi's plain `http://` address, **Take or upload a photo** works (it opens the phone's own camera app).
 
 ## 4. Folder structure
 

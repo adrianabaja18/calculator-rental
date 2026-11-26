@@ -9,6 +9,7 @@ import {
   LockerStatus,
   MAX_CLOCK_DRIFT_SECONDS,
 } from '@calc-rental/shared';
+import { startScanSession, takeScan } from '@calc-rental/shared/sqlite';
 import { BackendClient } from './backend/client';
 import { bridgeArgs, config } from './config';
 import { DEV_IDS, DEV_SETTINGS } from './db/dev-seed';
@@ -161,6 +162,11 @@ async function main(): Promise<void> {
   const kiosk = new KioskController(store, hardware, { rentals, payments, returns }, {
     now,
     sleepAfterMs: config.POWER_SAVE ? config.SLEEP_AFTER_SECONDS * 1000 : 0,
+    // Students send their ID from their phone to the web app on this Pi (same SQLite file).
+    phoneScan:
+      config.QR_SCANNER === 'phone'
+        ? { start: (at) => startScanSession(db, at), take: (id, at) => takeScan(db, id, at) }
+        : undefined,
     closedSleepAfterMs: config.CLOSED_SLEEP_AFTER_SECONDS * 1000,
     log: (level, message, data) => logger[level]({ event: 'KIOSK', ...data }, message),
   });
@@ -329,7 +335,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   logger.info(
-    { event: 'SERVICE_READY', qrScanner: config.QR_SCANNER === 'serial' ? config.SCANNER_PORT : 'mock' },
+    { event: 'SERVICE_READY', qrScanner: config.QR_SCANNER === 'serial' ? config.SCANNER_PORT : config.QR_SCANNER },
     config.HARDWARE_MODE === 'mock'
       ? 'Kiosk running on SIMULATED hardware (local SQLite). Type "help" for controls, Ctrl+C to stop.'
       : 'Kiosk running on REAL hardware (local SQLite).',

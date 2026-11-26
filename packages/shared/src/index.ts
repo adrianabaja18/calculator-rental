@@ -16,3 +16,4 @@ export * from './payment/coins';
 export * from './device';
 export * from './sync';
 export * from './sqlite-migrations';
+export * from './scan';

@@ -5,9 +5,12 @@ import { isLocalBackend } from '@/lib/mode';
 
 const LOCAL_SESSION_COOKIE = 'calc_local_session';
 const PUBLIC_PATHS = ['/login'];
+/** Open to everyone, signed in or not: the students' phone scan page. */
+const OPEN_PATHS = ['/scan'];
 
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  if (OPEN_PATHS.includes(pathname)) return NextResponse.next({ request });
   const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   if (isLocalBackend()) {

@@ -43,7 +43,11 @@ export const LCD = {
   starting: () => screen('STARTING...', 'PLEASE WAIT'),
   waitingForClock: () => screen('PLEASE WAIT', 'SYNCING CLOCK'),
   /** Idle: invite a scan and show every locker's status (e.g. "1:READY 2:N/A"). */
-  ready: (status: string) => screen('SCAN STUDENT ID', status),
+  ready: (status: string, phone = false) => screen(phone ? 'PRESS TO START' : 'SCAN STUDENT ID', status),
+  /** Phone ID scanning: "CODE 482913 1:59" (16). */
+  phoneCode: (code: string, secondsLeft: number) =>
+    screen('SCAN ID ON PHONE', `CODE ${code} ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`),
+  phoneTimeout: () => screen('TIME RAN OUT', 'PRESS TO RETRY'),
   pickLocker: (status: string) => screen('PUSH BLUE BUTTON', status),
   lockerUnavailable: (lockerNumber: number, status: string) => screen(`LOCKER ${lockerNumber} N/A`, status),
   selectTimeout: () => screen('NO LOCKER PICKED', 'PLEASE TRY AGAIN'),
@@ -61,7 +65,8 @@ export const LCD = {
       sameManilaDay(dueAt, now) ? `DUE AT ${formatPhilippineTime(dueAt)}` : `DUE ${weekday(dueAt)} ${formatPhilippineTime(dueAt)}`,
     ),
   /** Idle outside operating hours: students can still return. */
-  closedIdle: (opensAt: Date | null) => screen('RETURNS ONLY', opensAt ? `OPEN ${shortWhen(opensAt)}` : 'KIOSK CLOSED'),
+  closedIdle: (opensAt: Date | null, phone = false) =>
+    screen(phone ? 'PRESS TO RETURN' : 'RETURNS ONLY', opensAt ? `OPEN ${shortWhen(opensAt)}` : 'KIOSK CLOSED'),
   /** Someone tried to borrow outside operating hours. */
   closedForBorrowing: (opensAt: Date | null) => screen('KIOSK CLOSED', opensAt ? `OPEN ${shortWhen(opensAt)}` : 'SEE AN OFFICER'),
   penaltyDue: (overdueMinutes: number, penaltyCentavos: number) =>

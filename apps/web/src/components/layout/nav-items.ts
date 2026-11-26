@@ -42,6 +42,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: '/devices', label: 'Device Status', icon: 'devices', minimumRole: AdminRole.VIEWER },
       { href: '/events', label: 'Event Logs', icon: 'events', minimumRole: AdminRole.VIEWER },
+      { href: '/scans', label: 'ID Scans', icon: 'scans', minimumRole: AdminRole.VIEWER, localOnly: true },
       { href: '/audit', label: 'Audit Log', icon: 'audit', minimumRole: AdminRole.OFFICER },
       { href: '/admins', label: 'Admin Accounts', icon: 'admins', minimumRole: AdminRole.SUPER_ADMIN, localOnly: true },
       { href: '/settings', label: 'Settings', icon: 'settings', minimumRole: AdminRole.VIEWER },

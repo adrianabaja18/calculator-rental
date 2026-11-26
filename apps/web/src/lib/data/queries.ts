@@ -1350,3 +1350,40 @@ export async function queryAuditLogs(filters: {
 
 // Re-export operatingMinutesBetween / operatingCalendar if needed
 export { operatingCalendar, operatingMinutesBetween };
+
+// ---------------------------------------------------------------------------
+// ID scans from students' phones (scan_sessions, Pi-local SQLite only;
+// not synced to the cloud monitor).
+// ---------------------------------------------------------------------------
+
+export type IdScanFilter = '' | 'USED' | 'NOT_USED' | 'NO_ID';
+
+export interface IdScanRow {
+  id: string;
+  code: string;
+  status: 'WAITING' | 'SUBMITTED' | 'CONSUMED' | 'EXPIRED';
+  qr_payload: string | null;
+  created_at: string;
+  submitted_at: string | null;
+  consumed_at: string | null;
+}
+
+export async function queryIdScans(filters: { q: string; show: IdScanFilter; limit: number }): Promise<IdScanRow[]> {
+  if (!isLocalBackend()) return [];
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filters.show === 'NO_ID') clauses.push('qr_payload IS NULL');
+  else clauses.push('qr_payload IS NOT NULL');
+  if (filters.show === 'USED') clauses.push(`status = 'CONSUMED'`);
+  if (filters.show === 'NOT_USED') clauses.push(`status <> 'CONSUMED'`);
+  if (filters.q) {
+    clauses.push('LOWER(COALESCE(qr_payload, \'\')) LIKE ?');
+    params.push(`%${filters.q.toLowerCase()}%`);
+  }
+  return getLocalDb()
+    .prepare(
+      `SELECT id, code, status, qr_payload, created_at, submitted_at, consumed_at FROM scan_sessions
+       WHERE ${clauses.join(' AND ')} ORDER BY COALESCE(submitted_at, created_at) DESC LIMIT ?`,
+    )
+    .all(...params, filters.limit) as IdScanRow[];
+}
