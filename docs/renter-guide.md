@@ -47,16 +47,16 @@ Source text for the kiosk brochure/pamphlet. It matches what the kiosk actually 
 5. **Type the 6-digit code** from the kiosk screen and tap **Send to kiosk** within 2 minutes.
 6. **Choose a locker.** The screen shows `PUSH BLUE BUTTON`. Press the **BLUE** button of a locker marked **READY** within 30 seconds.
 7. **Pay ₱20.** The screen shows your name and `P20 / 3 HOURS`. Insert coins until it reads `PAYMENT P20/P20`.
-8. **Open the locker.** The screen shows `LOCKER 1 OPEN` / `TAKE CALCULATOR`. Open the door and take the calculator.
-9. **Close the door, then press RED.** The screen shows `CLOSE THE DOOR` / `PUSH RED BUTTON`. Shut the locker door firmly, then press that locker's **RED** button.
+8. **Open the locker right away.** The screen shows `LOCKER 1 OPEN` / `TAKE CALCULATOR`. Pull the door open **within 10 seconds** and take the calculator. Too late? Press that locker's **RED** button to unlock it again.
+9. **Close the door, then press RED.** The screen shows `CLOSE THE DOOR` / `PUSH RED BUTTON`. Push the locker door firmly shut until it clicks, then press that locker's **RED** button.
 10. **Done!** The screen shows `RENTAL SUCCESS` and your due time, for example `DUE AT 01:00 PM`, or `DUE WED 10:00 AM` if it falls on another day. Note it down.
 
 ## Returning a calculator
 1. **Send your ID from your phone**, exactly like borrowing steps 1–5. The kiosk knows you have a calculator out.
 2. **If you are late,** the screen shows how late you are and the fee, for example `LATE 1H00M` / `PAY PENALTY P10`. Insert the coins. The locker opens only after the fee is paid.
-3. **Open the locker.** The screen shows `RETURN CALC #1` / `TO LOCKER 1`, so you know which locker to use.
+3. **Open the locker right away.** The screen shows `RETURN CALC #1` / `TO LOCKER 1`, so you know which locker to use. Pull the door open **within 10 seconds**. Too late? Press that locker's **RED** button to unlock it again.
 4. **Put the calculator back** in the same locker it came from.
-5. **Close the door, then press RED.** When the screen shows `CLOSE THE DOOR` / `PUSH RED BUTTON`, shut the door and press that locker's **RED** button.
+5. **Close the door, then press RED.** When the screen shows `CLOSE THE DOOR` / `PUSH RED BUTTON`, push the door shut until it clicks, then press that locker's **RED** button.
 6. **Done!** The screen shows `RETURN SUCCESS` / `THANK YOU`, or the late fee you paid.
 
 ## Tips for scanning your ID
@@ -81,7 +81,7 @@ Source text for the kiosk brochure/pamphlet. It matches what the kiosk actually 
 | `PUSH BLUE BUTTON` | Press the blue button of a READY locker. |
 | `LOCKER 2 N/A` | That locker is empty. Choose the other one. |
 | `INSERT COINS` | Keep inserting coins until fully paid. |
-| `TAKE CALCULATOR` | Open the door and take the calculator. |
+| `TAKE CALCULATOR` | Pull the door open within 10 seconds and take the calculator. |
 | `CLOSE THE DOOR` / `PUSH RED BUTTON` | Shut the door, then press that locker's red button. |
 | `WRONG CALCULATOR` | That isn't the calculator you borrowed. Put the right one in, then press red again. |
 | `CALCULATOR NOT DETECTED` | Place the calculator properly inside, then press red again. |

@@ -8,7 +8,7 @@ import { createMockHardware, type MockHardware } from '../hardware/mock';
 import { PaymentService } from '../payment/payment-service';
 import { RentalService } from '../rental/rental-service';
 import { ReturnService } from '../rental/return-service';
-import { KioskController, type PhoneScan } from './kiosk-controller';
+import { KioskController, SOLENOID_MAX_ON_MS, type PhoneScan } from './kiosk-controller';
 import { KioskState, canMove } from './kiosk-states';
 
 // Fake identities only.
@@ -128,13 +128,14 @@ describe('borrowing (spec §5, blue/red buttons)', () => {
     await coin(10);
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_REMOVAL);
     expect(hw.coins.enabled).toBe(false);
-    expect(hw.lockers.unlocks).toEqual([{ channel: 2, maxMs: DEV_SETTINGS.removalTimeoutSeconds * SECOND }]); // only Locker 2
+    expect(hw.lockers.unlocks).toEqual([{ channel: 2, maxMs: SOLENOID_MAX_ON_MS }]); // only Locker 2, 10 s at most (heat)
     expect([...hw.lockers.open]).toEqual([2]);
     expect(lcd()).toEqual(['LOCKER 2 OPEN', 'TAKE CALCULATOR']);
 
-    await red(2); // calculator still inside: stays open
+    await red(2); // calculator still inside: the lock opens again for the student
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_REMOVAL);
     expect([...hw.lockers.open]).toEqual([2]);
+    expect(hw.lockers.unlocks).toHaveLength(2);
 
     hw.rfid.place(2, null); // student takes it
     await advance(SECOND);
@@ -265,7 +266,7 @@ describe('returning (spec §6, red button)', () => {
 
     await kiosk.handleScan(JUAN);
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_RETURN);
-    expect(hw.lockers.unlocks).toEqual([{ channel: 1, maxMs: DEV_SETTINGS.returnTimeoutSeconds * SECOND }]);
+    expect(hw.lockers.unlocks).toEqual([{ channel: 1, maxMs: SOLENOID_MAX_ON_MS }]);
     expect(lcd()).toEqual(['RETURN CALC #1', 'TO LOCKER 1']);
 
     hw.rfid.place(1, DEV_RFID.calc1);
@@ -280,13 +281,15 @@ describe('returning (spec §6, red button)', () => {
     expect(hw.lockers.open.size).toBe(0);
   });
 
-  it('red button with nothing inside: refused, locker stays unlocked', async () => {
+  it('red button with nothing inside: refused, the lock opens again', async () => {
     await borrow();
     await kiosk.handleScan(JUAN);
+    hw.lockers.unlocks.length = 0;
     await red(1);
     expect(lcd()).toEqual(['CALCULATOR', 'NOT DETECTED']);
     expect(kiosk.state).toBe(KioskState.WAITING_FOR_RETURN);
     expect([...hw.lockers.open]).toEqual([1]);
+    expect(hw.lockers.unlocks).toEqual([{ channel: 1, maxMs: SOLENOID_MAX_ON_MS }]);
   });
 
   it('late: asks for the penalty first, then opens the locker', async () => {

@@ -72,7 +72,7 @@ Start the dashboard (`npm run dev:web`), log in as a Super Admin, then:
 | Page | Do this |
 |---|---|
 | **Calculators** | CALC-001 → RFID UID **`FE-AC-31-03`** (tag A), CALC-002 → **`57-99-3B-03`** (tag B). Set the real **model**. Check each is assigned to the right locker (CALC-001 → Locker 1). |
-| **Settings** | Price ₱20 / 180 min, penalty ₱10 per 90 min, grace 10. **Operating hours** 09:00–17:00, the days the kiosk runs (default Mon–Fri; tick **Sat** if needed), and this semester's **closed dates** (holidays). Removal/return timeouts: start with 60/90 s, and lower them in Stage 4 if the solenoid gets hot. |
+| **Settings** | Price ₱20 / 180 min, penalty ₱10 per 90 min, grace 10. **Operating hours** 09:00–17:00, the days the kiosk runs (default Mon–Fri; tick **Sat** if needed), and this semester's **closed dates** (holidays). Removal/return timeouts: 60/90 s (how long the kiosk waits for the student; the solenoid itself is powered for 10 s at most). |
 | **Students** | The seed added 5 fake students (Juan, Maria…). Remove them (optional, below). |
 
 Optional, to remove the fake seed students who never rented (Supabase SQL Editor):
@@ -226,7 +226,7 @@ npm run hwcheck:pi
 | Backlight | `backlight off`, `backlight on` | the light turns off and on |
 | Buzzer | `beep ok`, `beep error` | 1 beep, then 3 beeps |
 | Relays | `unlock 1`, `unlock 2` | the relay clicks, the solenoid pulls, and both release after 3 s |
-| **Solenoid heat** | set `LOCK_PULSE_MS=60000` in `.env`, restart, `unlock 1`, touch after 60 s | warm is fine. **Too hot to hold** → lower the removal/return timeouts in Settings. Put 3000 back afterwards. |
+| **Solenoid heat & latch** | set `LOCK_PULSE_MS=10000` in `.env`, `unlock 1` five times in a row, then touch it; also with the lock unpowered, push the door shut: it must latch by itself (slanted bolt). If it can't close while locked, tell the software lead | warm is fine (the kiosk never powers it longer than 10 s). Put 3000 back afterwards. |
 | RFID | `rfid` | both readers say `no tag` (not NOT RESPONDING) |
 | Tags | `watch`, put each calculator in its locker | reader 1 `FE-AC-31-03`, reader 2 `57-99-3B-03` (tags **inside the calculators, in the lockers**) |
 | RFID power | `rfidpower off`, `rfid` → NOT RESPONDING; `rfidpower on`, `rfid` | both readers read again |
@@ -247,7 +247,7 @@ Expected: `PLEASE WAIT / SYNCING CLOCK` → `PRESS TO START / 1:READY 2:READY`. 
 Do these with a real school ID (see [testing.md](testing.md) §3.2–3.3 for the full list):
 - [ ] **Borrow:** press any button → `SCAN ID ON PHONE / CODE ...` → send the ID from a phone (Stage 1) → `PUSH BLUE BUTTON` → blue → name + `P20 / 3 HOURS` → coins → the locker unlocks → take the calculator → `CLOSE THE DOOR / PUSH RED BUTTON` → close it, press red → it locks → `RENTAL SUCCESS / DUE AT …`. **Pull the door: it's locked.**
 - [ ] **Return:** press a button, send the ID from the phone → that locker unlocks → put it back → red → `RETURN SUCCESS`.
-- [ ] **Wrong calculator** → `WRONG CALCULATOR`, and the locker stays unlocked until it's fixed.
+- [ ] **Wrong calculator** → `WRONG CALCULATOR`, and the lock opens again so it can be fixed.
 - [ ] **Payment timeout** (insert nothing for 2 min) → `PAYMENT TIMEOUT`, no locker opens.
 - [ ] **Power saving:** idle for 2 min → the LCD dims to `PRESS ANY BUTTON`. A button wakes it **and shows a code straight away**.
 - [ ] **Code timeout:** press a button and send nothing for 2 min → `TIME RAN OUT / PRESS TO RETRY`.
@@ -339,7 +339,7 @@ journalctl -u calculator-kiosk -f
 | Area | Why it's uncertain | If it misbehaves |
 |---|---|---|
 | Phone scanning | depends on the portable Wi-Fi and each phone's camera | if "No QR code found", take the photo closer and sharper; if phones can't open the page, check they joined the kiosk Wi-Fi and the Pi's reserved address hasn't changed. Send the phone model and what the page said. |
-| Solenoid heat | held open up to 60–90 s | lower the timeouts in Settings (minimum 15 s) |
+| Solenoid heat | powered 10 s at most (fixed in code) | if the door can't close while locked, the lock needs a slanted bolt |
 | LCD on 5 V pull-ups | can confuse the Pi's I2C | level shifter, or remove the backpack resistors |
 | Relays at 3.3 V | some boards don't switch off fully | JD-VCC trick, [raspberry-pi.md](raspberry-pi.md) §3.1 |
 | Coin pulses | selector speed vs. `COIN_PULSE_GAP_MS` | 300 ms, Slow pulse setting |

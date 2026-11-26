@@ -73,7 +73,7 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 2 | LCD size | — | ✅ **16×2** (confirmed 2026-11-17); all messages fit 16 characters |
 | 3 | 3rd relay for the coin selector | — | ✅ **Not fitted** (idle coins are logged for refund) |
 | 4 | Front-panel buttons | — | ✅ **Blue + red arcade button per locker** (decided 2026-11-25). Blue chooses the locker (GPIO 27/25; Locker 1 moved from GPIO 24 to 27 on 2026-11-28); red = "door closed", which locks it (GPIO 22/23). No door sensors. |
-| 4b | Solenoid heat when held unlocked | Phase 11 bring-up | ⏳ The lock is held ON until the red button is pressed (up to 60/90 s). Run the heat check in `docs/raspberry-pi.md` §3.1; if the lock gets too hot, lower the removal/return timeouts in Settings. |
+| 4b | Solenoid heat | Phase 11 bring-up | ✅ Fixed in software (2026-11-26): the solenoid is powered for **10 s at most** (`SOLENOID_MAX_ON_MS`), then the door latches when pushed shut. ⏳ Check on hardware: with the lock **unpowered**, push the door shut: it must latch by itself (slanted bolt). If it can't close while locked, tell the software lead. |
 | 5 | Real **RFID UIDs** of the two calculator tags | Phase 12 | ✅ Tag A `FE-AC-31-03` → CALC-001 (Locker 1), tag B `57-99-3B-03` → CALC-002 (Locker 2). ⚠️ **Enter them on the dashboard** (Calculators → Edit) before running the kiosk with sync, or the dashboard's fake seed UIDs replace them on the kiosk. |
 | 6b | ~~ESP32-CAM firmware 1.1.0~~ | — | ✅ **Not needed**: the ESP32-CAM is replaced by phone scanning (decided 2026-11-28). |
 | 6c | **Phones must reach the Pi** | Physical build | ✅ The kiosk uses the **team's portable Wi-Fi**; students join it to open `/scan`. Reserve the Pi's address on that router. **Photo upload only** (decided 2026-11-28): no https on the Pi, so the live-camera button is hidden. |
@@ -392,10 +392,10 @@ The team built a front panel: `[BLUE 1] [RED 1]  [LCD]  [BLUE 2] [RED 2]`. Wirin
 - **Borrow:**
   - The student scans their ID. A blocked or ineligible student is refused right away (`RentalService.checkRental`, read-only).
   - New state `SELECTING_LOCKER`: the student presses the **blue** button of a READY locker within 30 s. `startRental(qr, lockerNumber)` reserves exactly that locker.
-  - They pay, then the locker is **held unlocked**. They take the calculator, and the LCD shows `CLOSE THE DOOR` / `PUSH RED BUTTON`. The **red** button locks the locker and shows RENTAL SUCCESS.
+  - They pay, then the lock opens for **10 s** (so the solenoid can't overheat). They pull the door open, take the calculator, and the LCD shows `CLOSE THE DOOR` / `PUSH RED BUTTON`. The door latches when pushed shut; **red** confirms and shows RENTAL SUCCESS. Red pressed with the calculator still inside opens the lock again.
 - **Return:**
-  - The locker is held unlocked. The LCD gives live hints from the RFID reader (return-to, wrong calculator, or close and push red).
-  - **Red** checks the RFID. The right calculator → locks → RETURN SUCCESS. Wrong or missing → the locker stays unlocked so the student can fix it.
+  - The lock opens for 10 s. The LCD gives live hints from the RFID reader (return-to, wrong calculator, or close and push red).
+  - **Red** checks the RFID. The right calculator → locks → RETURN SUCCESS. Wrong or missing → the lock opens again for 10 s so the student can fix it.
 - **Locks:**
   - `LockerController.unlock(channel, maxMs)` holds the relay, and the new `lock(channel)` releases it.
   - The bridge turns the relay off at `maxMs` (the removal or return timeout) even if Node dies. Every timeout and crash path locks.

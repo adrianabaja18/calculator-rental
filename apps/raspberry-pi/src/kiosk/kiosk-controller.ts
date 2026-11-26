@@ -33,9 +33,11 @@ import { LCD, errorScreen, lockerStatusLine, type LcdScreen } from './lcd';
  *   handleButton(kind, ch)     front panel: blue = choose locker ch, red = "door ch closed"
  *   tick()                     every ~250 ms: timeouts, RFID polling, overdue marking
  *
- * Lockers: a locker stays UNLOCKED from payment until the student presses its
- * red button (or the removal/return timeout ends), then it locks. The bridge
- * itself releases the solenoid at that limit, so a crash never leaves it open.
+ * Lockers: after payment the solenoid is powered for at most SOLENOID_MAX_ON_MS
+ * (10 s, so it can't overheat), long enough to pull the door open. The door
+ * latches when pushed shut, and the student presses its red button to finish
+ * (or the removal/return timeout ends the flow). The bridge itself releases the
+ * solenoid at that limit, so a crash never leaves it powered.
  *
  * Business rules live in the services; this class only sequences them,
  * drives the hardware and the 16×2 LCD.
@@ -94,8 +96,15 @@ interface Flow {
   dueAt?: string;
 }
 
+/**
+ * Longest the solenoid is powered in one go. Cabinet solenoid locks are made for short pulses and
+ * overheat if held on, so the lock only stays open long enough to pull the door open. The door then
+ * latches by itself when pushed shut; the red button just confirms. The removal/return timeouts in
+ * Settings still decide how long the kiosk waits for the student.
+ */
+export const SOLENOID_MAX_ON_MS = 10_000;
 /** How long an officer's emergency unlock keeps the solenoid open. */
-export const OFFICER_UNLOCK_MS = 10_000;
+export const OFFICER_UNLOCK_MS = SOLENOID_MAX_ON_MS;
 
 interface SensorSnapshot {
   rfidState: RfidState;
@@ -385,7 +394,7 @@ export class KioskController {
     if (!dispensing.ok) throw new Error(dispensing.message);
     const holdMs = this.settings().removalTimeoutSeconds * 1000;
     try {
-      await this.hw.lockers.unlock(flow.channel, holdMs);
+      await this.hw.lockers.unlock(flow.channel, SOLENOID_MAX_ON_MS);
     } catch (error) {
       this.services.rentals.failDispensing(flow.rentalId, 'LOCKER_OPEN_FAILED');
       throw error;
@@ -401,7 +410,7 @@ export class KioskController {
     const opened = this.services.returns.openReturnLocker(flow.rentalId);
     if (!opened.ok) throw new Error(opened.message);
     const holdMs = this.settings().returnTimeoutSeconds * 1000;
-    await this.hw.lockers.unlock(flow.channel, holdMs);
+    await this.hw.lockers.unlock(flow.channel, SOLENOID_MAX_ON_MS);
     flow.deadline = this.now().getTime() + holdMs;
     this.move(KioskState.WAITING_FOR_RETURN);
     await this.show(LCD.returnTo(flow.calculatorCode, flow.lockerNumber));
@@ -414,7 +423,8 @@ export class KioskController {
     const now = this.now().getTime();
 
     if (this.state === KioskState.WAITING_FOR_REMOVAL) {
-      // The calculator is still inside: the locker stays open until it is taken.
+      // The calculator is still inside: open the lock again so the student can take it.
+      await this.hw.lockers.unlock(flow.channel, SOLENOID_MAX_ON_MS);
       await this.hw.buzzer.beep('error');
       return;
     }
@@ -437,7 +447,8 @@ export class KioskController {
         await this.show(LCD.returnSuccess(result.penaltyPaidCentavos));
         return;
       }
-      // Not accepted: the locker stays unlocked so the student can fix it.
+      // Not accepted: open the lock again so the student can fix it.
+      await this.hw.lockers.unlock(flow.channel, SOLENOID_MAX_ON_MS);
       return this.notice(result.code === ErrorCode.RFID_MISMATCH ? LCD.wrongCalculator(flow.calculatorCode) : errorScreen(result.code));
     }
   }
