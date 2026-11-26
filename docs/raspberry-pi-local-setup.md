@@ -51,7 +51,28 @@ npm run start:pi
 
 ## 4. Transferring to the Raspberry Pi 4
 
-### 4.1 Install OS Packages & Node.js 22 LTS
+### Quick Automated Setup (Recommended — One Command)
+On Raspberry Pi OS 64-bit (Bookworm or newer), clone the repo and run the turnkey installer—it enables SPI/I2C, installs Python GPIO packages and Node.js 22 LTS, configures `.env` + `.env.local`, seeds the local SQLite database and real calculator RFID UIDs, builds the production Next.js dashboard, and installs/enables both `systemd` auto-start services:
+
+```bash
+cd ~
+git clone https://github.com/adrianabaja18/calculator-rental.git
+cd calculator-rental
+chmod +x scripts/setup-rpi4.sh
+./scripts/setup-rpi4.sh
+sudo reboot
+```
+
+To take a safe live snapshot backup of the Pi's SQLite database at any time (even while the kiosk and web dashboard are running):
+```bash
+npm run backup:pi
+```
+
+---
+
+### Manual Step-by-Step Reference (What `setup-rpi4.sh` Does)
+
+#### 4.1 Install OS Packages & Node.js 22 LTS
 On Raspberry Pi OS 64-bit (Bookworm or newer):
 
 ```bash
