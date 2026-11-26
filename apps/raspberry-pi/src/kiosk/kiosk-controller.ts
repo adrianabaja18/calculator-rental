@@ -13,6 +13,7 @@ import {
   parseStudentQr,
   type SystemSettings,
 } from '@calc-rental/shared';
+import { SCAN_SESSION_SECONDS, type ScanSessionStatus } from '@calc-rental/shared/sqlite';
 import type { KioskStore } from '../db/kiosk-store';
 import type { ButtonKind, Hardware } from '../hardware/types';
 import type { CoinInput, PaymentService } from '../payment/payment-service';
@@ -25,7 +26,9 @@ import { LCD, errorScreen, lockerStatusLine, type LcdScreen } from './lcd';
  * The kiosk's brain (spec §21): turns hardware events into rental steps.
  *
  * Inputs, all funnelled through ONE queue so they never interleave:
- *   handleScan(raw)            QR code from the ESP32-CAM
+ *   handleScan(raw)            QR text from a local scanner (console / old ESP32-CAM)
+ *   phone scan                 any button at idle → 6-digit code on the LCD → the
+ *                              student sends their ID from their phone → read from SQLite
  *   handleCoin(coin)           coin from the coin selector
  *   handleButton(kind, ch)     front panel: blue = choose locker ch, red = "door ch closed"
  *   tick()                     every ~250 ms: timeouts, RFID polling, overdue marking
@@ -52,8 +55,28 @@ export interface KioskOptions {
   sleepAfterMs?: number;
   /** Shorter idle time before sleeping while closed (outside operating hours). */
   closedSleepAfterMs?: number;
+  /**
+   * Phone ID scanning (scan sessions in the shared SQLite). When set, a button press at idle starts a
+   * scan session instead of waiting for a local scanner.
+   */
+  phoneScan?: PhoneScan;
+  /** How often to check SQLite for the ID the phone sent. */
+  phonePollMs?: number;
   now?: () => Date;
   log?: (level: 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
+}
+
+/** Scan sessions in the Pi's SQLite (startScanSession / takeScan), shared with the web app's /scan page. */
+export interface PhoneScan {
+  start(now: Date): { id: string; code: string };
+  take(id: string, now: Date): { status: ScanSessionStatus; qr: string | null };
+}
+
+interface PhoneSession {
+  id: string;
+  code: string;
+  deadline: number;
+  lastPollAt: number;
 }
 
 interface Flow {
@@ -87,6 +110,8 @@ export class KioskController {
   /** Between the scan and the blue button press. */
   private selection: { raw: string; deadline: number } | null = null;
   private officerUnlock: { channel: number; until: number } | null = null;
+  /** While the LCD shows a phone code. */
+  private phone: PhoneSession | null = null;
   private holdUntil = 0;
   private queue: Promise<void> = Promise.resolve();
   private readonly sensors = new Map<string, SensorSnapshot>();
@@ -98,6 +123,8 @@ export class KioskController {
   private readonly sensorWriteIntervalMs: number;
   private readonly sleepAfterMs: number;
   private readonly closedSleepAfterMs: number;
+  private readonly phoneScan: PhoneScan | null;
+  private readonly phonePollMs: number;
   private readonly now: () => Date;
   private readonly log: NonNullable<KioskOptions['log']>;
 
@@ -112,6 +139,8 @@ export class KioskController {
     this.sensorWriteIntervalMs = options.sensorWriteIntervalMs ?? 30_000;
     this.sleepAfterMs = options.sleepAfterMs ?? 0;
     this.closedSleepAfterMs = options.closedSleepAfterMs ?? 30_000;
+    this.phoneScan = options.phoneScan ?? null;
+    this.phonePollMs = options.phonePollMs ?? 500;
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (() => {});
   }
@@ -168,8 +197,14 @@ export class KioskController {
 
   handleButton(kind: ButtonKind, channel: number): Promise<void> {
     return this.enqueue(async () => {
-      // Asleep: the press only wakes the kiosk (a student shouldn't pick a locker by accident).
-      if (this.state === KioskState.SLEEPING) return this.wake(`${kind} button`);
+      // Asleep: the press only wakes the kiosk (a student shouldn't pick a locker by accident)…
+      if (this.state === KioskState.SLEEPING) {
+        await this.wake(`${kind} button`);
+        // …except with phone scanning, where waking up IS "I want to start".
+        if (this.phoneScan) await this.startPhoneScan();
+        return;
+      }
+      if (this.phoneScan && this.state === KioskState.SYSTEM_READY) return this.startPhoneScan();
       return kind === 'select' ? this.onSelect(channel) : this.onClose(channel);
     });
   }
@@ -196,6 +231,49 @@ export class KioskController {
       this.log('info', 'Scan ignored: kiosk busy', { state: this.state });
       return;
     }
+    return this.identify(raw);
+  }
+
+  /** Phone scanning: a fresh code in the shared SQLite, shown with a countdown. */
+  private async startPhoneScan() {
+    const now = this.now();
+    const started = this.phoneScan!.start(now);
+    // A little shorter than the code's real limit, so the LCD never shows a dead code.
+    const deadline = now.getTime() + (SCAN_SESSION_SECONDS - 5) * 1000;
+    this.phone = { id: started.id, code: started.code, deadline, lastPollAt: 0 };
+    this.move(KioskState.WAITING_FOR_PHONE);
+    await this.hw.buzzer.beep('ok');
+    await this.showPhoneCode(now.getTime());
+  }
+
+  private showPhoneCode(now: number) {
+    const phone = this.phone!;
+    return this.show(LCD.phoneCode(phone.code, Math.max(0, Math.ceil((phone.deadline - now) / 1000))));
+  }
+
+  /** Every tick while the code is up: countdown, and has the phone sent the ID yet? */
+  private async checkPhone(now: number) {
+    const phone = this.phone!;
+    if (now > phone.deadline) {
+      this.phone = null;
+      return this.message(LCD.phoneTimeout(), 'error');
+    }
+    await this.showPhoneCode(now);
+    if (now - phone.lastPollAt < this.phonePollMs) return;
+    phone.lastPollAt = now;
+    const { status, qr } = this.phoneScan!.take(phone.id, new Date(now));
+    if (status === 'SUBMITTED' && qr) {
+      this.phone = null;
+      return this.identify(qr);
+    }
+    if (status !== 'WAITING') {
+      this.phone = null;
+      return this.message(LCD.phoneTimeout(), 'error');
+    }
+  }
+
+  /** The student's ID text arrived (local scanner or phone): borrow or return? */
+  private async identify(raw: string) {
     this.move(KioskState.VALIDATING_STUDENT);
     await this.show(LCD.checking());
 
@@ -411,6 +489,9 @@ export class KioskController {
         this.housekeeping(now);
         return;
 
+      case KioskState.WAITING_FOR_PHONE:
+        return this.checkPhone(now);
+
       case KioskState.SELECTING_LOCKER:
         if (now > this.selection!.deadline) {
           this.selection = null;
@@ -573,8 +654,9 @@ export class KioskController {
     const settings = this.store.getSettings();
     const cal = settings ? operatingCalendar(settings) : null;
     const now = this.now();
-    if (cal && !isOpenAt(now, cal)) return LCD.closedIdle(nextOpening(now, cal));
-    return LCD.ready(lockerStatusLine(this.lockerAvailability()));
+    const phone = this.phoneScan !== null;
+    if (cal && !isOpenAt(now, cal)) return LCD.closedIdle(nextOpening(now, cal), phone);
+    return LCD.ready(lockerStatusLine(this.lockerAvailability()), phone);
   }
 
   /** Error beep + a screen that stays up for messageMs before live hints resume (flow continues). */
@@ -594,6 +676,7 @@ export class KioskController {
   private async message(lcd: LcdScreen, beep: 'error' | 'attention') {
     this.move(KioskState.SHOWING_MESSAGE);
     this.flow = null;
+    this.phone = null;
     this.holdUntil = this.now().getTime() + this.messageMs;
     await this.hw.buzzer.beep(beep);
     await this.show(lcd);
@@ -603,6 +686,7 @@ export class KioskController {
     this.move(KioskState.SYSTEM_READY);
     this.flow = null;
     this.selection = null;
+    this.phone = null;
     await this.hw.coins.setEnabled(false);
     await this.show(this.idleScreen());
   }
@@ -675,6 +759,7 @@ export class KioskController {
       this.flow = null;
       this.selection = null;
       this.officerUnlock = null;
+      this.phone = null;
       this.holdUntil = this.now().getTime() + this.messageMs;
       if (channel !== undefined) await this.hw.lockers.lock(channel).catch(() => {});
       await this.hw.coins.setEnabled(false).catch(() => {});

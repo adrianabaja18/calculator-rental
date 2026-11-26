@@ -23,6 +23,10 @@ export const ErrorCode = {
   NO_ACTIVE_RENTAL: 'NO_ACTIVE_RENTAL',
   /** Borrowing outside operating hours (returns are still accepted). */
   KIOSK_CLOSED: 'KIOSK_CLOSED',
+  /** Phone scan: the kiosk code is wrong, used or expired. */
+  SCAN_CODE_INVALID: 'SCAN_CODE_INVALID',
+  /** Phone scan: too many wrong codes from this phone — wait a few minutes. */
+  TOO_MANY_TRIES: 'TOO_MANY_TRIES',
   DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE',
   NETWORK_OFFLINE: 'NETWORK_OFFLINE',
   DEVICE_UNAUTHORIZED: 'DEVICE_UNAUTHORIZED',

@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
+import QRCode from 'qrcode';
 import { AdminRole, hasRole } from '@calc-rental/shared';
 import { LiveRefresh } from '@/components/live-refresh';
 import { PageHeader } from '@/components/page-header';
@@ -30,6 +32,7 @@ export default async function DeviceStatusPage() {
   const canAct = hasRole(admin.role, AdminRole.OFFICER) && !isDashboardReadOnly();
 
   const { devices, lockers, commands } = await queryDeviceStatusPageData();
+  const scan = local ? await scanSticker() : null;
 
   return (
     <>
@@ -186,6 +189,48 @@ export default async function DeviceStatusPage() {
           ))}
         </tbody>
       </TableCard>
+      {scan && (
+        <>
+          <h2 className="mb-3 mt-8 text-lg font-semibold text-slate-900">Student scan page</h2>
+          <div className="flex flex-wrap items-center gap-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            {/* SVG generated on the server from this dashboard's own address. */}
+            <div className="h-40 w-40 shrink-0" dangerouslySetInnerHTML={{ __html: scan.svg }} />
+            <div className="max-w-md text-sm text-slate-700">
+              <p>
+                Print this QR and stick it next to the kiosk LCD. Students on the kiosk Wi-Fi scan it to open{' '}
+                <span className="font-mono text-slate-900">{scan.url}</span> and send their school ID.
+              </p>
+              {scan.isLocalhost && (
+                <p role="alert" className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-amber-900">
+                  This link only works on the Pi itself. Open the dashboard from a phone or laptop using the Pi&apos;s network
+                  address (e.g. http://192.168.1.50:3000), or set <code>SCAN_PAGE_URL</code>, then print the sticker.
+                </p>
+              )}
+              <p className="mt-2 text-slate-500">
+                Over plain http phones can take or upload a photo of the ID; the live camera view needs https.
+              </p>
+              <a
+                href={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(scan.svg)}`}
+                download="kiosk-scan-qr.svg"
+                className="mt-3 inline-block font-medium text-blue-700 underline underline-offset-2"
+              >
+                Download the QR (SVG)
+              </a>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
+}
+
+/** The /scan link for the sticker: SCAN_PAGE_URL if set, else the address this dashboard was opened with. */
+async function scanSticker() {
+  const h = await headers();
+  const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'localhost:3000';
+  const proto = h.get('x-forwarded-proto') ?? 'http';
+  const url = process.env.SCAN_PAGE_URL?.trim() || `${proto}://${host}/scan`;
+  const isLocalhost = /^https?:\/\/(localhost|127\.|\[::1\])/i.test(url);
+  const svg = await QRCode.toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
+  return { url, svg, isLocalhost };
 }

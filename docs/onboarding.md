@@ -49,13 +49,14 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 7 | Return rules, RFID verification, penalty engine, Settings page | ✅ Done and verified |
 | 8 | Realtime dashboard: summary cards, Active Rentals countdowns, live updates | ✅ Done and verified |
 | 9 | Raspberry Pi service: state machine, mock hardware, 16×2 LCD messages, device login + heartbeat | ✅ Done and verified |
-| 10 | ESP32-CAM QR firmware + serial link | ✅ Done and verified on the real board |
+| 10 | ESP32-CAM QR firmware + serial link | ✅ Done and verified on the real board. ⛔ Retired in 14d (image quality too low for dirty IDs and dim light). |
 | 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer, front-panel buttons (Python helper) | ✅ Built and tested in software. ⏳ Bring-up on the Pi (§6.0g). |
 | 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ✅ Built and tested in software. ⏳ Needs `db:push` + a run against the live project (§6). |
 | 13 | Device monitoring, emergency unlock, event and audit logs, transactions, payments, penalties (waive) | ✅ Built and tested in software. ⏳ Needs `db:push` (§6). |
 | 14 | Kiosk simulator (browser), full-system scenario tests, hardware acceptance checklist | ✅ Built. ⏳ Hardware checklist to run on the real kiosk ([testing.md](testing.md) §3). |
 | 14b | Operating hours: rental and late time count only while open; borrowing only while open | ✅ Built and tested in software (§6.0k) |
-| 14c | Power saving: idle sleep (LCD backlight, ESP32-CAM camera, RFID readers off), heat watch | ✅ Built and tested in software. ⏳ Re-flash the ESP32-CAM (1.1.0), test on hardware (§6). |
+| 14c | Power saving: idle sleep (LCD backlight, RFID readers off), heat watch | ✅ Built and tested in software. ⏳ Test on hardware (§6.0l). |
+| 14e | Phone ID scanning: students send their ID from their phone (`/scan` on the Pi), the kiosk shows a 6-digit code. No internet needed. | ✅ Built and tested in software. ⏳ Try on real phones (§6). |
 | 15 | Deployment and final documentation | ⬜ Next |
 
 **Rule for the team:** a phase is finished only when its verification checklist passes. Don't start the next phase on top of a broken one.
@@ -74,7 +75,8 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 4 | Front-panel buttons | — | ✅ **Blue + red arcade button per locker** (decided 2026-11-25). Blue chooses the locker (GPIO 24/25); red = "door closed", which locks it (GPIO 22/23). No door sensors. |
 | 4b | Solenoid heat when held unlocked | Phase 11 bring-up | ⏳ The lock is held ON until the red button is pressed (up to 60/90 s). Run the heat check in `docs/raspberry-pi.md` §3.1; if the lock gets too hot, lower the removal/return timeouts in Settings. |
 | 5 | Real **RFID UIDs** of the two calculator tags | Phase 12 | ✅ Tag A `FE-AC-31-03` → CALC-001 (Locker 1), tag B `57-99-3B-03` → CALC-002 (Locker 2). ⚠️ **Enter them on the dashboard** (Calculators → Edit) before running the kiosk with sync, or the dashboard's fake seed UIDs replace them on the kiosk. |
-| 6b | **ESP32-CAM firmware 1.1.0** (power saving) | Power saving | ⏳ Re-flash the board (`firmware/esp32-cam/README.md` §2, §6). With 1.0.0 everything works except the camera never sleeps. |
+| 6b | ~~ESP32-CAM firmware 1.1.0~~ | — | ✅ **Not needed**: the ESP32-CAM is replaced by phone scanning (decided 2026-11-28). |
+| 6c | **Phones must reach the Pi** | Physical build | ⚠️ Students' phones need to join the kiosk's network (school Wi-Fi or the Pi's hotspot) to open `/scan`. The **live camera** view needs **https**; over the Pi's `http://` address students use **Take or upload a photo**. Decide later whether to add https on the Pi. |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
 | — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, **paid before the return locker opens** (2026-11-18). **Operating hours Mon–Fri 9 AM–5 PM; rental and late time count only while open** (2026-11-27, replaces counting overnight). All editable on the Settings page. |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
@@ -166,15 +168,63 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Power saving (after Phase 14)
+## 6. Phone ID scanning (after Phase 14)
+
+### Why (team decision 2026-11-28)
+The ESP32-CAM's camera was too weak for real IDs: dirty cards, dim light and slow decoding made scans fail. Every student already carries a much better camera, so **students now scan their ID with their own phone**. The ESP32-CAM is no longer used.
+
+### How it works
+```
+student presses any button ─▶ kiosk writes a code to SQLite ─▶ LCD: SCAN ID ON PHONE / CODE 482913 1:55
+student scans the sticker ─▶ http://<pi-ip>:3000/scan on their phone ─▶ camera or photo ─▶ decoded ON the phone
+student types the code ─▶ POST /api/scan {code, qr} ─▶ web app on the Pi checks the code, parses the QR again
+kiosk checks SQLite every 0.5 s ─▶ gets the ID text once ─▶ the normal borrow/return flow (blue button, coins, …)
+```
+- **No internet needed:** the web app and the kiosk share the Pi's SQLite file. Phones only need to be on the kiosk's network (school Wi-Fi or the Pi's hotspot).
+- The **code** proves the student is at the kiosk (it's only on the LCD). Codes are random, single-use, and expire after 2 minutes. A new code ends the previous one.
+- **Guessing is blocked:** 10 wrong codes in 10 minutes from one phone → "Too many wrong codes" for a while. Phones are counted by a salted hash of their address; no addresses are stored.
+- **Privacy:** the photo never leaves the phone. Only the QR text goes to the Pi, and it's **deleted** as soon as the kiosk has taken it.
+- **Decoding:** the browser's own QR detector when it has one (Android Chrome), otherwise jsQR tried at several sizes, on the centre of the photo, and with a contrast boost for dim or faded IDs. A test photo with a small, faded QR in a dim, noisy 3000×2000 picture decoded fine.
+
+### What was built
+| Where | What |
+|---|---|
+| `packages/shared/src/sqlite-migrations.ts` | migration **7**: `scan_sessions`, `scan_code_failures` |
+| `packages/shared/src/sqlite-node.ts` | `startScanSession`, `submitScan`, `takeScan`, `scanClientHash` (kiosk and web app share them) |
+| `packages/shared/src/scan.ts` | the phone's request schema |
+| `apps/web/src/app/api/scan/route.ts` | phone: POST `{code, qr}` (public, rate-limited; local mode only) |
+| `apps/web/src/app/scan/` | the phone page (`/scan`, no login): camera with light toggle, photo upload, code entry |
+| `apps/web/src/proxy.ts` | `/scan` skips the login redirect |
+| Devices page | **Student scan page** card: printable QR sticker of the Pi's `/scan` link (or `SCAN_PAGE_URL`) |
+| `apps/raspberry-pi/src/kiosk/` | new state `WAITING_FOR_PHONE`; LCD `PRESS TO START`, `SCAN ID ON PHONE / CODE …`, `TIME RAN OUT`; asleep, the press wakes it **and** shows a code |
+| `.env` | `QR_SCANNER=phone` (new default in `.env.example`); `mock` and `serial` still work for testing |
+
+### Set it up
+1. Merge `phase-14e/phone-scan-local`. Nothing to push to Supabase: the SQLite tables are created automatically when the kiosk or the web app starts.
+2. On the Pi: `QR_SCANNER=phone` in `apps/raspberry-pi/.env`, and keep the web app running (`calculator-web` service). Leave the ESP32-CAM unplugged.
+3. Open the dashboard **from a phone or laptop** using the Pi's address (e.g. `http://192.168.1.50:3000`), go to **Devices → Student scan page**, and print the sticker. (Opened as `localhost`, the page warns you that the link won't work on phones.)
+
+### Verification checklist
+- [ ] `npm test` passes (387 tests).
+- [ ] Phones on the kiosk network open the sticker link; **Take or upload a photo** of a test ID shows the right name (Android and iPhone).
+- [ ] Kiosk: a button → code on the LCD counting down → send from the phone → `PUSH BLUE BUTTON` within ~1 s.
+- [ ] Wrong code on the phone → "That code is wrong or has expired". Code left for 2 min → `TIME RAN OUT`.
+- [ ] Unplug the Pi's internet (keep the Wi-Fi/hotspot): borrowing with a phone still works.
+
+### Known limits
+- The live camera view needs https; over `http://<pi-ip>` students use the photo button.
+- If the web app on the Pi is stopped, phones can't open `/scan`. The kiosk still shows codes, which then run out.
+- The simulator still uses its typed "scan" box (it has no phone link).
+
+## 6.0l Power saving (after Phase 14)
 
 ### What it does
 When nobody uses the kiosk, it **sleeps** after **2 min** idle on the ready screen (**30 s** when closed):
-- **ESP32-CAM camera off**: power-down pin, no decoding, CPU 240 → 80 MHz. This is the main heat and current saver.
+- ~~ESP32-CAM camera off~~ (retired in 14d; the code stays for the `serial` scanner option).
 - **LCD backlight off**: the LCD shows `PRESS ANY BUTTON / TO START`, dim.
 - **RC522 readers off**: RST held LOW on GPIO 4/16, re-initialised on wake. Sensor polling pauses.
 
-**Any button** wakes it. That press only wakes it and never picks a locker. A coin, an officer unlock, or a scan also wakes it. It never sleeps in the middle of a rental or return.
+**Any button** wakes it. That press never picks a locker. With phone scanning it also shows a code right away. A coin, an officer unlock, or a scan also wakes it. It never sleeps in the middle of a rental or return.
 
 **Heat watch:** a WARNING event when the Pi's CPU reaches 75 °C, CRITICAL at 80 °C (at most every 30 min). **Devices** shows *Power: Asleep/Awake*.
 

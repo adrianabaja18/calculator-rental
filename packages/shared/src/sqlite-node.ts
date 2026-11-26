@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -350,4 +350,87 @@ export function ensureDefaultLocalAdmin(
     ).run(randomUUID(), email, fullName, hashPassword(password), AdminRole.SUPER_ADMIN, nowIso, nowIso);
     return { created: true, email };
   })();
+}
+
+// ---------------------------------------------------------------------------
+// Phone ID scanning (migration 7). Used by the kiosk (start/take) and the
+// local web app's public /api/scan (submit). Same file, same rules.
+// ---------------------------------------------------------------------------
+
+/** How long a kiosk code is valid. */
+export const SCAN_SESSION_SECONDS = 120;
+/** This many wrong codes from one phone within the window → refused for a while. */
+export const SCAN_MAX_WRONG_CODES = 10;
+const SCAN_WRONG_CODE_WINDOW_MS = 10 * 60_000;
+
+export type ScanSessionStatus = 'WAITING' | 'SUBMITTED' | 'CONSUMED' | 'EXPIRED';
+
+/** Kiosk: a fresh random code. Any older open session ends (one kiosk per Pi). */
+export function startScanSession(db: LocalDatabase, now: Date): { id: string; code: string; expiresAt: string } {
+  return db.transaction(() => {
+    db.prepare(`UPDATE scan_sessions SET status = 'EXPIRED', qr_payload = NULL WHERE status IN ('WAITING', 'SUBMITTED')`).run();
+    db.prepare(`DELETE FROM scan_sessions WHERE created_at < ?`).run(new Date(now.getTime() - 86_400_000).toISOString());
+    const id = randomUUID();
+    const code = String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, '0');
+    const expiresAt = new Date(now.getTime() + SCAN_SESSION_SECONDS * 1000).toISOString();
+    db.prepare(`INSERT INTO scan_sessions (id, code, created_at, expires_at) VALUES (?, ?, ?, ?)`).run(id, code, now.toISOString(), expiresAt);
+    return { id, code, expiresAt };
+  })();
+}
+
+/** Phone: attach the ID text to the waiting session with this code. */
+export function submitScan(
+  db: LocalDatabase,
+  input: { code: string; qr: string; clientHash: string },
+  now: Date,
+): 'OK' | 'BAD_CODE' | 'TOO_MANY_TRIES' {
+  return db.transaction(() => {
+    const nowIso = now.toISOString();
+    const since = new Date(now.getTime() - SCAN_WRONG_CODE_WINDOW_MS).toISOString();
+    const { n } = db
+      .prepare(`SELECT count(*) AS n FROM scan_code_failures WHERE client_hash = ? AND at > ?`)
+      .get(input.clientHash, since) as { n: number };
+    if (n >= SCAN_MAX_WRONG_CODES) return 'TOO_MANY_TRIES' as const;
+
+    const updated = db
+      .prepare(
+        `UPDATE scan_sessions SET status = 'SUBMITTED', qr_payload = ?, submitted_at = ?
+         WHERE code = ? AND status = 'WAITING' AND expires_at > ?`,
+      )
+      .run(input.qr, nowIso, input.code, nowIso);
+    if (Number(updated.changes) === 1) return 'OK' as const;
+
+    db.prepare(`INSERT INTO scan_code_failures (client_hash, at) VALUES (?, ?)`).run(input.clientHash, nowIso);
+    db.prepare(`DELETE FROM scan_code_failures WHERE at < ?`).run(new Date(now.getTime() - 86_400_000).toISOString());
+    return 'BAD_CODE' as const;
+  })();
+}
+
+/** Kiosk: has the phone sent the ID? The text is handed over ONCE, then deleted. */
+export function takeScan(db: LocalDatabase, id: string, now: Date): { status: ScanSessionStatus; qr: string | null } {
+  return db.transaction(() => {
+    const row = db.prepare(`SELECT status, qr_payload, expires_at FROM scan_sessions WHERE id = ?`).get(id) as
+      | { status: ScanSessionStatus; qr_payload: string | null; expires_at: string }
+      | undefined;
+    if (!row) return { status: 'EXPIRED' as const, qr: null };
+    if (row.status === 'WAITING' && row.expires_at <= now.toISOString()) {
+      db.prepare(`UPDATE scan_sessions SET status = 'EXPIRED' WHERE id = ?`).run(id);
+      return { status: 'EXPIRED' as const, qr: null };
+    }
+    if (row.status === 'SUBMITTED') {
+      db.prepare(`UPDATE scan_sessions SET status = 'CONSUMED', consumed_at = ?, qr_payload = NULL WHERE id = ?`).run(now.toISOString(), id);
+      return { status: 'SUBMITTED' as const, qr: row.qr_payload };
+    }
+    return { status: row.status, qr: null };
+  })();
+}
+
+/** A per-Pi random salt, so phone addresses are never stored, even hashed without a secret. */
+export function scanClientHash(db: LocalDatabase, clientAddress: string): string {
+  let salt = getLocalConfig(db, 'scan_hash_salt');
+  if (!salt) {
+    salt = randomBytes(16).toString('hex');
+    setLocalConfig(db, 'scan_hash_salt', salt);
+  }
+  return createHash('sha256').update(`${salt}|${clientAddress}`).digest('hex');
 }

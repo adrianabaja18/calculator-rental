@@ -351,4 +351,34 @@ export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = [
       CREATE INDEX device_commands_recent_idx ON device_commands (requested_at DESC);
     `,
   },
+  {
+    version: 7,
+    name: 'phone_scan_sessions',
+    sql: `
+      -- Phone ID scanning (replaces the ESP32-CAM). The kiosk shows a 6-digit
+      -- code; the student's phone sends the ID text to the Pi's /scan page;
+      -- the kiosk takes it once. The text is deleted as soon as it is taken.
+      CREATE TABLE scan_sessions (
+        id           TEXT PRIMARY KEY NOT NULL,
+        code         TEXT NOT NULL CHECK (length(code) = 6 AND code NOT GLOB '*[^0-9]*'),
+        status       TEXT NOT NULL DEFAULT 'WAITING' CHECK (status IN ('WAITING', 'SUBMITTED', 'CONSUMED', 'EXPIRED')),
+        qr_payload   TEXT CHECK (qr_payload IS NULL OR length(qr_payload) <= 512),
+        created_at   TEXT NOT NULL,
+        expires_at   TEXT NOT NULL,
+        submitted_at TEXT,
+        consumed_at  TEXT
+      ) STRICT;
+      -- A code identifies at most one waiting session at a time.
+      CREATE UNIQUE INDEX scan_sessions_waiting_code ON scan_sessions (code) WHERE status = 'WAITING';
+      CREATE INDEX scan_sessions_created_idx ON scan_sessions (created_at DESC);
+
+      -- Wrong codes per phone (salted hash of its address), to stop guessing.
+      CREATE TABLE scan_code_failures (
+        id          INTEGER PRIMARY KEY,
+        client_hash TEXT NOT NULL,
+        at          TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX scan_code_failures_client_idx ON scan_code_failures (client_hash, at);
+    `,
+  },
 ];

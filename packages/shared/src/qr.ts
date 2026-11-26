@@ -9,7 +9,7 @@ import { CourseProgramSchema, StudentFullNameSchema, StudentNumberSchema } from 
  *   FULL NAME <TAB> STUDENT NUMBER <TAB> COURSE
  *   e.g. "JUAN DELA CRUZ\t2022100001\tBSCpE"
  *
- * - The ESP32-CAM forwards the RAW text; it never interprets it.
+ * - The phone (or a local scanner) sends the RAW text; it never interprets it.
  * - The Pi parses it for the LCD, and the backend parses it AGAIN
  *   (never trust what the device says it decoded — Rule 14).
  * - The QR has no year level, so year_level stays null.

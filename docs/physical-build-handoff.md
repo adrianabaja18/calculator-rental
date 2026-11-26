@@ -5,7 +5,7 @@ This guide takes the team from **an assembled frame and a box of parts** to **a 
 | Stage | What | Who | Time |
 |---|---|---|---|
 | 0 | Get the software ready (merge, database, dashboard) | Lead | 30 min |
-| 1 | Flash the ESP32-CAM (firmware 1.1.0) | Anyone with a laptop | 20 min |
+| 1 | Phone scan page: print the sticker, try it on phones (after Stage 2, when the Pi runs the web app) | Anyone with a phone | 20 min |
 | 2 | Prepare the Raspberry Pi (OS, packages, Node, code, `.env`) | Anyone | 1 h |
 | 3 | Wire everything, power **off**, then check with a multimeter | Hardware team | 2–3 h |
 | 4 | Test each part on its own (`hwcheck:pi`) | Hardware team | 1 h |
@@ -16,7 +16,11 @@ This guide takes the team from **an assembled frame and a box of parts** to **a 
 
 Related documents: [wiring-guide.pdf](wiring-guide.pdf) (every pin, printable), [raspberry-pi.md](raspberry-pi.md) (detailed wiring and troubleshooting), [testing.md](testing.md) (full checklists), [renter-guide.pdf](renter-guide.pdf) (for students), [onboarding.md](onboarding.md) (what each phase built).
 
-> ⚠️ **Honest status:** everything below is tested in software (369 automated tests, a simulator, and a compiled firmware build), but **none of it has run on your physical kiosk yet**. Expect to debug. Section 9 lists what is most likely to need adjusting.
+> ⚠️ **Honest status:** everything below is tested in software (387 automated tests and a simulator), but **none of it has run on your physical kiosk yet**. Expect to debug. Section 9 lists what is most likely to need adjusting.
+
+> 📱 **No ESP32-CAM any more (Phase 14e).** Students scan their ID with **their own phone**: they press any kiosk button, the LCD shows a 6-digit code, and they send their ID from the Pi's `/scan` page. Leave the ESP32-CAM unplugged (keep it as a spare). No internet is needed, but **phones must be on the kiosk's network** (school Wi-Fi or the Pi's hotspot).
+
+> 🏠 **The dashboard now runs on the Pi itself** (team PR #20/#21). Where this guide mentions a laptop backend, Supabase or `db:push`, follow [raspberry-pi-local-setup.md](raspberry-pi-local-setup.md) instead.
 
 ---
 
@@ -28,6 +32,8 @@ Related documents: [wiring-guide.pdf](wiring-guide.pdf) (every pin, printable), 
 3. `phase-14/simulator`
 4. `phase-14b/operating-hours`
 5. `phase-14c/power-management`
+6. `handoff/physical-build`
+7. `phase-14e/phone-scan-local`
 
 Each builds on the one before. Wait for CI to pass on each, then:
 ```bash
@@ -41,7 +47,7 @@ npm test
 ```bash
 npm run db:push
 ```
-This adds the sync, monitoring and operating-hours migrations to the live Supabase project.
+This adds the sync, monitoring and operating-hours migrations to the live Supabase project (only needed for the online monitor; phone scanning lives in the Pi's SQLite).
 
 ### 0.3 Make a real device password for the kiosk
 The seed uses a public placeholder secret. Replace it before the kiosk goes on a real network.
@@ -86,15 +92,16 @@ Until Phase 15 deploys the dashboard to Vercel, the kiosk talks to **a laptop ru
 
 ---
 
-## Stage 1: Flash the ESP32-CAM (firmware 1.1.0)
-Follow [firmware/esp32-cam/README.md](../firmware/esp32-cam/README.md) steps 1–3 and **6**:
-1. Arduino IDE settings: ESP32 core **2.0.17**, board **AI Thinker ESP32-CAM**, library **ESP32QRCodeReader**.
-2. Upload `firmware/esp32-cam/esp32-cam-qr/esp32-cam-qr.ino`.
-3. Serial Monitor at 115200 should show `{"type":"hello","fw":"1.1.0","state":"awake"}`. Scanning an ID shows `{"type":"qr",...}`.
-4. Power saving: send `{"cmd":"sleep"}`, then `{"cmd":"wake"}`. QR codes read again after about 1 s. **Repeat 5 times.**
+## Stage 1: Phone scan page and its sticker
+Do this once the Pi runs the web app (Stage 2 and [raspberry-pi-local-setup.md](raspberry-pi-local-setup.md)). Students open `http://<pi-ip>:3000/scan` on their phone.
+1. From a phone or laptop **on the kiosk network**, open the dashboard at the Pi's address (e.g. `http://192.168.1.50:3000`) and sign in.
+2. **Devices** → **Student scan page** → **Download the QR (SVG)**. Print it about 5 × 5 cm and stick it next to the LCD with a line like "Scan to send your ID". If the card shows a yellow warning, you opened the dashboard as `localhost`: use the Pi's address, or set `SCAN_PAGE_URL` in `apps/web/.env.local`.
+3. Give the Pi a **fixed address** (a DHCP reservation on the router, or the Pi's own hotspot), or the sticker stops working when the address changes.
+4. Test with at least one **Android** and one **iPhone**: scan the sticker → the page opens → **Take or upload a photo** of a test ID → the name appears. Try a dim spot and a slightly dirty ID too.
+5. **Live camera** (the **Use camera** button) needs **https**. Over the Pi's `http://` address phones refuse it, and the page says so and offers the photo option. That's expected.
 
-✅ The scanner reads IDs, and still reads after every sleep/wake.
-❌ If it stops reading after a wake-up, report it (Section 9). The kiosk still works with `POWER_SAVE=false`.
+✅ Both phones read a test ID from a photo and show the right name.
+❌ If a phone can't open the page at all, it's not on the kiosk's network, or the web app on the Pi isn't running.
 
 ---
 
@@ -149,8 +156,7 @@ Change only these lines:
 BACKEND_URL=http://192.168.1.20:3000        # the laptop's Network address from Stage 0.5
 DEVICE_SECRET=<the secret from Stage 0.3>
 HARDWARE_MODE=real
-QR_SCANNER=serial
-SCANNER_PORT=/dev/ttyUSB0
+QR_SCANNER=phone
 LOG_PRETTY=false
 ```
 Leave the pin settings as they are. They match the final wiring:
@@ -188,7 +194,7 @@ Use **[wiring-guide.pdf](wiring-guide.pdf)**: the 40-pin map is on page 2 and ea
 | 6 | **Buttons ×4** | COM ① → GND rail; NO ③ (bottom tab): RED 1 → pin 15, RED 2 → pin 16, BLUE 1 → pin 18, BLUE 2 → pin 22; NC ② unused |
 | 7 | **PC817 (coin)** | Pi side: pin 4 → pin 11 (GPIO 17) + 10 kΩ to pin 17 (3.3 V); pin 3 → pin 20 (GND). 12 V side: +12 V → 2.2 kΩ → pin 1; selector COIN → pin 2. |
 | 8 | **12 V side** | +12 V → relay COM1, COM2, coin selector +12 V, 2.2 kΩ. Relay NO1/NO2 → solenoid +. Solenoid − and selector GND → **12 V −**. **Flyback diode across each solenoid** (stripe to +). |
-| 9 | **ESP32-CAM** | USB-C cable to a Pi USB port |
+| 9 | ~~ESP32-CAM~~ | Not used any more (phones scan IDs). Leave it unplugged. |
 
 ### Before the first power-on (multimeter, power OFF)
 - [ ] **No continuity** between the 12 V + and any Pi pin or rail.
@@ -233,15 +239,17 @@ Keep the dashboard laptop running (Stage 0.5).
 ```bash
 npm run start:pi
 ```
-Expected: `PLEASE WAIT / SYNCING CLOCK` → `SCAN STUDENT ID / 1:READY 2:READY`. The first sync downloads the lockers and calculators, so `READY` can take up to 1 minute after a clean database.
+Expected: `PLEASE WAIT / SYNCING CLOCK` → `PRESS TO START / 1:READY 2:READY`. The first sync downloads the lockers and calculators, so `READY` can take up to 1 minute after a clean database.
 
 Do these with a real school ID (see [testing.md](testing.md) §3.2–3.3 for the full list):
-- [ ] **Borrow:** scan → `PUSH BLUE BUTTON` → blue → name + `P20 / 3 HOURS` → coins → the locker unlocks → take the calculator → `CLOSE THE DOOR / PUSH RED BUTTON` → close it, press red → it locks → `RENTAL SUCCESS / DUE AT …`. **Pull the door: it's locked.**
-- [ ] **Return:** scan → that locker unlocks → put it back → red → `RETURN SUCCESS`.
+- [ ] **Borrow:** press any button → `SCAN ID ON PHONE / CODE ...` → send the ID from a phone (Stage 1) → `PUSH BLUE BUTTON` → blue → name + `P20 / 3 HOURS` → coins → the locker unlocks → take the calculator → `CLOSE THE DOOR / PUSH RED BUTTON` → close it, press red → it locks → `RENTAL SUCCESS / DUE AT …`. **Pull the door: it's locked.**
+- [ ] **Return:** press a button, send the ID from the phone → that locker unlocks → put it back → red → `RETURN SUCCESS`.
 - [ ] **Wrong calculator** → `WRONG CALCULATOR`, and the locker stays unlocked until it's fixed.
 - [ ] **Payment timeout** (insert nothing for 2 min) → `PAYMENT TIMEOUT`, no locker opens.
-- [ ] **Power saving:** idle for 2 min → the LCD dims to `PRESS ANY BUTTON`. A button wakes it, and **a QR scan works within ~2 s**.
-- [ ] **After hours** (or set *Closes* to a few minutes from now in Settings): `RETURNS ONLY`, borrowing → `KIOSK CLOSED`, returns still work.
+- [ ] **Power saving:** idle for 2 min → the LCD dims to `PRESS ANY BUTTON`. A button wakes it **and shows a code straight away**.
+- [ ] **Code timeout:** press a button and send nothing for 2 min → `TIME RAN OUT / PRESS TO RETRY`.
+- [ ] **No internet:** unplug the Pi's internet but keep its Wi-Fi/hotspot: borrowing with a phone still works.
+- [ ] **After hours** (or set *Closes* to a few minutes from now in Settings): `PRESS TO RETURN`, borrowing → `KIOSK CLOSED`, returns still work.
 - [ ] **Power cut:** pay, then unplug the Pi before taking the calculator. After reboot the kiosk is ready, no locker opened by itself, and the rental shows **Failed** on the dashboard (refund it by hand).
 
 Stop it with **Ctrl+C**.
@@ -257,11 +265,11 @@ With `start:pi` running and the dashboard open:
 | Borrow at the kiosk | appears on **Active Rentals** within ~10 s, with a countdown |
 | Return | disappears from Active Rentals, and appears on **Transactions** as Completed |
 | Late return | **Penalties** shows it Paid; **Payments** shows ₱20 + ₱10 |
-| Block a student on the dashboard | within ~1 min their scan says `ACCOUNT BLOCKED` |
+| Block a student on the dashboard | within ~1 min sending their ID says `ACCOUNT BLOCKED` |
 | Locker 2 → Maintenance | within ~1 min the LCD shows `2:N/A` |
 | **Emergency unlock** (Devices, reason required) | the locker opens for 10 s within ~10 s; Recent commands shows Done; it appears in Audit Logs |
-| Unplug the network, borrow, plug it back | the rental appears once; nothing lost or doubled |
-| **Event Logs** | scans, coins and unlocks appear; no ERROR/CRITICAL rows you can't explain |
+| Send your ID, then unplug the network while paying; finish the borrow and plug it back | the rental appears once; nothing lost or doubled |
+| **Event Logs** | rentals, coins and unlocks appear; no ERROR/CRITICAL rows you can't explain |
 
 ---
 
@@ -298,12 +306,12 @@ Live log:
 ```bash
 journalctl -u calculator-kiosk -f
 ```
-✅ After `sudo reboot`, the LCD comes back to `SCAN STUDENT ID` by itself.
+✅ After `sudo reboot`, the LCD comes back to `PRESS TO START` by itself.
 
 ### 7.2 Daily routine
 | When | Do |
 |---|---|
-| Morning | Plug in the 12 V adapter, then the Pi. Wait for `SCAN STUDENT ID` (it waits for internet time first). |
+| Morning | Plug in the 12 V adapter, then the Pi. Wait for `PRESS TO START` (it waits for internet time first). The web app (and the `/scan` page) starts on the Pi with it. |
 | During the day | Nothing. Check **Devices** now and then. |
 | After hours | **Shut down before unplugging** (unplugging a running Pi can corrupt the SD card): `sudo shutdown -h now`, wait until the green LED stops blinking (~10 s), then unplug the Pi, then the 12 V adapter. Phase 15 adds a shutdown button. |
 | Weekly | **Event Logs** filtered to Error/Critical. **Penalties** for anything still owed. **Payments** for failed rentals that need a refund. |
@@ -314,10 +322,10 @@ journalctl -u calculator-kiosk -f
 | # | Item | Done by | Date |
 |---|---|---|---|
 | 1 | Stage 0: PRs merged, `db:push`, device secret replaced, real UIDs and settings on the dashboard | | |
-| 2 | Stage 1: ESP32-CAM 1.1.0 reads IDs and survives sleep/wake ×5 | | |
+| 2 | Stage 1: sticker printed and stuck on; an Android and an iPhone both send a test ID | | |
 | 3 | Stage 3: multimeter checks passed, two-step power-on OK | | |
 | 4 | Stage 4: every `hwcheck` row passed, solenoid heat acceptable | | |
-| 5 | Stage 5: borrow, return, wrong calculator, timeout, sleep, after hours, power cut | | |
+| 5 | Stage 5: borrow, return, wrong calculator, timeouts, borrowing without internet, sleep, after hours, power cut | | |
 | 6 | Stage 6: every dashboard check passed | | |
 | 7 | Stage 7: auto-start after reboot, safe shutdown practised | | |
 | 8 | Renter guide printed with the officer contact filled in | | |
@@ -327,7 +335,7 @@ journalctl -u calculator-kiosk -f
 ## 9. Most likely to need adjusting (and what to send back)
 | Area | Why it's uncertain | If it misbehaves |
 |---|---|---|
-| ESP32-CAM sleep/wake (fw 1.1.0) | new decoding loop, not yet run on the board | set `POWER_SAVE=false` to keep going; send the Serial Monitor output after a failed wake |
+| Phone scanning | depends on the kiosk network and each phone's camera | photo upload is the fallback for the live camera; if phones can't reach the page, check they're on the kiosk network and the Pi's address hasn't changed. Send the phone model and what the page said. |
 | Solenoid heat | held open up to 60–90 s | lower the timeouts in Settings (minimum 15 s) |
 | LCD on 5 V pull-ups | can confuse the Pi's I2C | level shifter, or remove the backpack resistors |
 | Relays at 3.3 V | some boards don't switch off fully | JD-VCC trick, [raspberry-pi.md](raspberry-pi.md) §3.1 |
