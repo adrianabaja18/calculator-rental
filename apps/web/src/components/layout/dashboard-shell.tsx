@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ADMIN_ROLE_LABEL, APP_NAME, hasRole, type AdminRole } from '@calc-rental/shared';
 import { signOut } from '@/lib/auth/actions';
+import { isDashboardReadOnly, isLocalBackend } from '@/lib/mode';
 import { ToastProvider } from '@/components/ui/toast';
 import { Icon } from './icons';
 import { NAV_SECTIONS } from './nav-items';
@@ -15,20 +16,16 @@ export interface ShellAdmin {
   role: AdminRole;
 }
 
-/**
- * Dashboard frame: sidebar (desktop) / slide-in drawer (mobile) + top header.
- * Rendered by app/(dashboard)/layout.tsx AFTER requireAdmin() succeeded.
- */
 export function DashboardShell({ admin, children }: { admin: ShellAdmin; children: React.ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const pathname = usePathname();
+  const local = isLocalBackend();
+  const readOnly = isDashboardReadOnly();
 
-  // Close the mobile drawer after navigating.
   useEffect(() => setMenuOpen(false), [pathname]);
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Mobile backdrop */}
       {menuOpen && (
         <button
           type="button"
@@ -59,7 +56,9 @@ export function DashboardShell({ admin, children }: { admin: ShellAdmin; childre
 
         <nav className="flex-1 overflow-y-auto px-3 py-4">
           {NAV_SECTIONS.map((section) => {
-            const items = section.items.filter((item) => hasRole(admin.role, item.minimumRole));
+            const items = section.items.filter(
+              (item) => hasRole(admin.role, item.minimumRole) && (!item.localOnly || local),
+            );
             if (items.length === 0) return null;
             return (
               <div key={section.title} className="mb-5">
@@ -100,6 +99,18 @@ export function DashboardShell({ admin, children }: { admin: ShellAdmin; childre
           >
             <Icon name="menu" />
           </button>
+
+          <span
+            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+              local
+                ? 'border border-emerald-200 bg-emerald-50 text-emerald-800'
+                : readOnly
+                  ? 'border border-sky-200 bg-sky-50 text-sky-800'
+                  : 'border border-slate-200 bg-slate-100 text-slate-700'
+            }`}
+          >
+            {local ? 'Local Pi (SQLite)' : readOnly ? 'Online Monitor (Read-only)' : 'Cloud Mode'}
+          </span>
 
           <div className="ml-auto flex items-center gap-3">
             <div className="hidden text-right sm:block">

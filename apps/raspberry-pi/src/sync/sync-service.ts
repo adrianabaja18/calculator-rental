@@ -40,6 +40,8 @@ export interface SyncOptions {
   pullIntervalMs?: number;
   /** Synced outbox rows are deleted after this many days. */
   keepSyncedDays?: number;
+  /** Set false for one-way outbound cloud sync when the local Pi dashboard owns all data. */
+  pullEnabled?: boolean;
 }
 
 const CURSOR_STUDENTS = 'sync_cursor_students';
@@ -232,12 +234,17 @@ export class SyncService {
     };
   }
 
-  /** Pull first (fresh settings and lockers), then push; then keep both going on timers. */
+  /** Pull first (when two-way pull is enabled), then push; then keep timers going. */
   start(): void {
-    void this.pull().then(() => this.push());
+    const pullEnabled = this.options.pullEnabled ?? true;
+    if (pullEnabled) {
+      void this.pull().then(() => this.push());
+      this.timers.push(setInterval(() => void this.pull(), this.options.pullIntervalMs ?? 60_000));
+    } else {
+      void this.push();
+    }
     this.prune();
     this.timers.push(setInterval(() => void this.push(), this.options.pushIntervalMs ?? 10_000));
-    this.timers.push(setInterval(() => void this.pull(), this.options.pullIntervalMs ?? 60_000));
     this.timers.push(setInterval(() => this.prune(), 6 * 3_600_000));
   }
 

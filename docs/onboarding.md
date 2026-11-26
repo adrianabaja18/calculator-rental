@@ -32,6 +32,8 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 
 **Building the physical kiosk?** Follow **[physical-build-handoff.md](physical-build-handoff.md)**: stage by stage from parts to a working kiosk, with a sign-off table.
 
+**Running both the kiosk and admin dashboard locally on the Raspberry Pi 4 (offline SQLite + optional read-only cloud monitor)?** Follow **[raspberry-pi-local-setup.md](raspberry-pi-local-setup.md)**.
+
 ---
 
 ## 2. Project status

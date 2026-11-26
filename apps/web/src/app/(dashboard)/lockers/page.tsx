@@ -1,27 +1,22 @@
 import type { Metadata } from 'next';
-import { AdminRole, OPEN_RENTAL_STATUSES, hasRole } from '@calc-rental/shared';
+import { AdminRole, hasRole } from '@calc-rental/shared';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryLockersPageData } from '@/lib/data/queries';
 import { formatRelative } from '@/lib/format';
+import { isDashboardReadOnly } from '@/lib/mode';
 import { toneFor } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { LockerRowActions } from './locker-actions';
 
 export const metadata: Metadata = { title: 'Lockers' };
 
 export default async function LockersPage() {
   const admin = await requireAdmin();
-  const canManage = hasRole(admin.role, AdminRole.OFFICER);
+  const canManage = hasRole(admin.role, AdminRole.OFFICER) && !isDashboardReadOnly();
 
-  const supabase = await createSupabaseServerClient();
-  const [{ data: lockers, error }, { data: openRentals }] = await Promise.all([
-    supabase.from('v_lockers').select('*').order('locker_number'),
-    supabase.from('rental_transactions').select('locker_id').in('status', [...OPEN_RENTAL_STATUSES]),
-  ]);
-  if (error) throw new Error('Failed to load lockers');
-  const busyLockers = new Set((openRentals ?? []).map((r) => r.locker_id));
+  const lockers = await queryLockersPageData();
   const mismatches = lockers.filter((l) => l.has_inventory_mismatch);
   const columns = canManage ? 7 : 6;
 
@@ -39,7 +34,7 @@ export default async function LockersPage() {
         </div>
       )}
 
-      <TableCard footer="Lock, door and RFID states are reported by the kiosk. They read UNKNOWN until the kiosk is connected.">
+      <TableCard footer="Lock, door and RFID states are reported by the kiosk. They read UNKNOWN until the kiosk is running.">
         <thead>
           <tr>
             <Th>Locker</Th>
@@ -75,17 +70,17 @@ export default async function LockersPage() {
                 )}
               </Td>
               <Td>
-                <StatusBadge tone={toneFor(l.status)}>{l.status ?? ''}</StatusBadge>
+                <StatusBadge tone={toneFor(l.status)}>{l.status}</StatusBadge>
                 <Sub>{l.is_assignable ? 'Ready to lend' : 'Not lendable right now'}</Sub>
               </Td>
               <Td>
                 <div className="flex flex-wrap gap-1">
-                  <StatusBadge tone={toneFor(l.lock_state)}>{l.lock_state ?? ''}</StatusBadge>
-                  <StatusBadge tone={toneFor(l.door_state)}>{l.door_state ?? ''}</StatusBadge>
+                  <StatusBadge tone={toneFor(l.lock_state)}>{l.lock_state}</StatusBadge>
+                  <StatusBadge tone={toneFor(l.door_state)}>{l.door_state}</StatusBadge>
                 </div>
               </Td>
               <Td>
-                <StatusBadge tone={toneFor(l.rfid_state)}>{l.rfid_state ?? ''}</StatusBadge>
+                <StatusBadge tone={toneFor(l.rfid_state)}>{l.rfid_state}</StatusBadge>
                 {l.last_detected_rfid_uid && (
                   <Sub>
                     sees <span className="font-mono">{l.last_detected_rfid_uid}</span>
@@ -93,7 +88,7 @@ export default async function LockersPage() {
                 )}
               </Td>
               <Td>
-                <StatusBadge tone={toneFor(l.device_connection_status)}>{l.device_connection_status ?? ''}</StatusBadge>
+                <StatusBadge tone={toneFor(l.device_connection_status)}>{l.device_connection_status}</StatusBadge>
                 <Sub>
                   {l.device_code} · seen {formatRelative(l.last_seen_at)}
                 </Sub>
@@ -102,11 +97,11 @@ export default async function LockersPage() {
                 <Td>
                   <LockerRowActions
                     locker={{
-                      id: l.id!,
-                      name: l.name!,
+                      id: l.id,
+                      name: l.name,
                       notes: l.notes,
-                      status: l.status!,
-                      hasOpenRental: busyLockers.has(l.id!),
+                      status: l.status,
+                      hasOpenRental: l.has_open_rental,
                     }}
                   />
                 </Td>

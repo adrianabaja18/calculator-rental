@@ -5,9 +5,10 @@ import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { FilterBar } from '@/components/ui/filter-bar';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryCalculatorsPageData } from '@/lib/data/queries';
 import { cleanSearch, formatDateTime } from '@/lib/format';
+import { isDashboardReadOnly } from '@/lib/mode';
 import { humanize, toneFor } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { AddCalculatorButton, CalculatorRowActions, type LockerOption } from './calculator-actions';
 
 export const metadata: Metadata = { title: 'Calculators' };
@@ -30,22 +31,12 @@ export default async function CalculatorsPage({
   const status = (Object.values(CalculatorStatus) as string[]).includes(params.status ?? '')
     ? (params.status as CalculatorStatus)
     : '';
-  const canManage = hasRole(admin.role, AdminRole.OFFICER);
+  const canManage = hasRole(admin.role, AdminRole.OFFICER) && !isDashboardReadOnly();
 
-  const supabase = await createSupabaseServerClient();
-  let query = supabase.from('v_calculators').select('*').order('code');
-  if (q) query = query.or(`code.ilike.%${q}%,model.ilike.%${q}%,rfid_uid.ilike.%${q}%`);
-  if (status) query = query.eq('status', status);
+  const { calculators, lockers, allCodes } = await queryCalculatorsPageData({ q, status });
 
-  const [{ data: calculators, error }, { data: lockers }, { data: allCodes }] = await Promise.all([
-    query,
-    supabase.from('v_lockers').select('id, locker_number, name, calculator_id').order('locker_number'),
-    supabase.from('calculators').select('code'),
-  ]);
-  if (error) throw new Error('Failed to load calculators');
-
-  const lockerOptions: LockerOption[] = (lockers ?? []).map((l) => ({
-    id: l.id!,
+  const lockerOptions: LockerOption[] = lockers.map((l) => ({
+    id: l.id,
     label: `${l.name} (#${l.locker_number})`,
     calculatorId: l.calculator_id,
   }));
@@ -58,7 +49,7 @@ export default async function CalculatorsPage({
         description="Each calculator has a permanent RFID tag and normally lives in one locker."
         actions={
           canManage && (
-            <AddCalculatorButton suggestedCode={nextCalculatorCode((allCodes ?? []).map((c) => c.code))} lockers={lockerOptions} />
+            <AddCalculatorButton suggestedCode={nextCalculatorCode(allCodes)} lockers={lockerOptions} />
           )
         }
       />
@@ -94,8 +85,8 @@ export default async function CalculatorsPage({
               <Td>{c.locker_name ?? <span className="text-slate-400">None</span>}</Td>
               <Td>
                 <div className="flex flex-wrap gap-1">
-                  <StatusBadge tone={toneFor(c.status)}>{c.status ?? ''}</StatusBadge>
-                  {c.condition !== 'GOOD' && <StatusBadge tone={toneFor(c.condition)}>{c.condition ?? ''}</StatusBadge>}
+                  <StatusBadge tone={toneFor(c.status)}>{c.status}</StatusBadge>
+                  {c.condition !== 'GOOD' && <StatusBadge tone={toneFor(c.condition)}>{c.condition}</StatusBadge>}
                 </div>
                 {c.notes && <Sub>{c.notes}</Sub>}
               </Td>
@@ -120,14 +111,14 @@ export default async function CalculatorsPage({
                   <CalculatorRowActions
                     lockers={lockerOptions}
                     calculator={{
-                      id: c.id!,
-                      code: c.code!,
-                      model: c.model!,
-                      rfidUid: c.rfid_uid!,
+                      id: c.id,
+                      code: c.code,
+                      model: c.model,
+                      rfidUid: c.rfid_uid,
                       lockerId: c.locker_id,
-                      condition: c.condition!,
+                      condition: c.condition,
                       notes: c.notes,
-                      status: c.status!,
+                      status: c.status,
                       hasOpenRental: Boolean(c.open_rental_id),
                     }}
                   />

@@ -6,16 +6,11 @@ import { ActorType, AdminRole, StudentStatus } from '@calc-rental/shared';
 import { actionFail, actionFromDbError, actionFromZodError, actionOk, type ActionResult } from '@/lib/action-result';
 import { writeAuditLog } from '@/lib/audit';
 import { requireAdmin } from '@/lib/auth/session';
+import { enqueueLocalSync, getLocalDb } from '@/lib/local-db';
+import { isDashboardReadOnly, isLocalBackend } from '@/lib/mode';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
-/**
- * Officer actions on students. Each one:
- *   1. re-checks the admin's role on the server (requireAdmin),
- *   2. validates the form with Zod,
- *   3. writes with the service-role client (dashboard users are read-only in RLS),
- *   4. records an audit log entry with the before/after values.
- * Under SQLite-first, the kiosk picks up the new status on its next sync.
- */
+const READ_ONLY_MSG = 'The online monitoring dashboard is read-only. Block or unblock students on the local Raspberry Pi dashboard.';
 
 const BlockSchema = z.object({
   studentId: z.uuid(),
@@ -24,8 +19,46 @@ const BlockSchema = z.object({
 
 export async function blockStudent(_previous: ActionResult, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin(AdminRole.OFFICER);
+  if (isDashboardReadOnly()) return actionFail(READ_ONLY_MSG);
+
   const parsed = BlockSchema.safeParse({ studentId: formData.get('studentId'), reason: formData.get('reason') });
   if (!parsed.success) return actionFromZodError(parsed.error);
+
+  if (isLocalBackend()) {
+    const db = getLocalDb();
+    const before = db
+      .prepare('SELECT id, full_name, student_number, status, blocked_reason FROM students WHERE id = ?')
+      .get(parsed.data.studentId) as
+      | { id: string; full_name: string; student_number: string; status: StudentStatus; blocked_reason: string | null }
+      | undefined;
+    if (!before) return actionFail('Student not found.');
+    if (before.status === StudentStatus.BLOCKED) return actionFail(`${before.full_name} is already blocked.`);
+
+    const nowIso = new Date().toISOString();
+    db.transaction(() => {
+      db.prepare('UPDATE students SET status = ?, blocked_reason = ?, updated_at = ? WHERE id = ?').run(
+        StudentStatus.BLOCKED,
+        parsed.data.reason,
+        nowIso,
+        before.id,
+      );
+      enqueueLocalSync(db, 'student_admin', before.id, db.prepare('SELECT * FROM students WHERE id = ?').get(before.id));
+    })();
+
+    await writeAuditLog({
+      actorType: ActorType.ADMIN,
+      actorId: admin.id,
+      actorLabel: admin.email,
+      action: 'STUDENT_BLOCKED',
+      targetType: 'student',
+      targetId: before.id,
+      previousValue: { status: before.status, blocked_reason: before.blocked_reason },
+      newValue: { status: StudentStatus.BLOCKED, blocked_reason: parsed.data.reason },
+      reason: parsed.data.reason,
+    });
+    revalidatePath('/students');
+    return actionOk(`${before.full_name} (${before.student_number}) is now blocked on the kiosk.`);
+  }
 
   const db = createSupabaseAdminClient();
   const { data: before } = await db
@@ -62,8 +95,44 @@ const UnblockSchema = z.object({ studentId: z.uuid() });
 
 export async function unblockStudent(_previous: ActionResult, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin(AdminRole.OFFICER);
+  if (isDashboardReadOnly()) return actionFail(READ_ONLY_MSG);
+
   const parsed = UnblockSchema.safeParse({ studentId: formData.get('studentId') });
   if (!parsed.success) return actionFromZodError(parsed.error);
+
+  if (isLocalBackend()) {
+    const db = getLocalDb();
+    const before = db
+      .prepare('SELECT id, full_name, student_number, status, blocked_reason FROM students WHERE id = ?')
+      .get(parsed.data.studentId) as
+      | { id: string; full_name: string; student_number: string; status: StudentStatus; blocked_reason: string | null }
+      | undefined;
+    if (!before) return actionFail('Student not found.');
+    if (before.status !== StudentStatus.BLOCKED) return actionFail(`${before.full_name} is not blocked.`);
+
+    const nowIso = new Date().toISOString();
+    db.transaction(() => {
+      db.prepare('UPDATE students SET status = ?, blocked_reason = NULL, updated_at = ? WHERE id = ?').run(
+        StudentStatus.ACTIVE,
+        nowIso,
+        before.id,
+      );
+      enqueueLocalSync(db, 'student_admin', before.id, db.prepare('SELECT * FROM students WHERE id = ?').get(before.id));
+    })();
+
+    await writeAuditLog({
+      actorType: ActorType.ADMIN,
+      actorId: admin.id,
+      actorLabel: admin.email,
+      action: 'STUDENT_UNBLOCKED',
+      targetType: 'student',
+      targetId: before.id,
+      previousValue: { status: before.status, blocked_reason: before.blocked_reason },
+      newValue: { status: StudentStatus.ACTIVE, blocked_reason: null },
+    });
+    revalidatePath('/students');
+    return actionOk(`${before.full_name} (${before.student_number}) is unblocked.`);
+  }
 
   const db = createSupabaseAdminClient();
   const { data: before } = await db

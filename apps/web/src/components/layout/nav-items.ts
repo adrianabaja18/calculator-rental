@@ -1,16 +1,13 @@
 import { AdminRole } from '@calc-rental/shared';
 import type { IconName } from './icons';
 
-/**
- * Sidebar navigation — the single list of dashboard pages.
- * `minimumRole` hides links a role can't use (the page itself ALSO checks,
- * hiding a link is only a convenience, not security).
- */
 export interface NavItem {
   href: string;
   label: string;
   icon: IconName;
   minimumRole: AdminRole;
+  /** Shown only when running locally on the Raspberry Pi (`DATA_BACKEND=local`). */
+  localOnly?: boolean;
 }
 
 export interface NavSection {
@@ -46,6 +43,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/devices', label: 'Device Status', icon: 'devices', minimumRole: AdminRole.VIEWER },
       { href: '/events', label: 'Event Logs', icon: 'events', minimumRole: AdminRole.VIEWER },
       { href: '/audit', label: 'Audit Log', icon: 'audit', minimumRole: AdminRole.OFFICER },
+      { href: '/admins', label: 'Admin Accounts', icon: 'admins', minimumRole: AdminRole.SUPER_ADMIN, localOnly: true },
       { href: '/settings', label: 'Settings', icon: 'settings', minimumRole: AdminRole.VIEWER },
     ],
   },

@@ -93,6 +93,7 @@ export function HealthPanel() {
 }
 
 function HealthDetails({ report, fetchedAt }: { report: HealthReport; fetchedAt: Date }) {
+  const isLocal = report.environment.endsWith('-local');
   return (
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -119,8 +120,8 @@ function HealthDetails({ report, fetchedAt }: { report: HealthReport; fetchedAt:
           <p className="mt-1 font-mono text-xs text-slate-500">{report.serverTime} (UTC, stored)</p>
         </Card>
 
-        <CheckCard title="Supabase (public key)" check={report.checks.supabase} />
-        <CheckCard title="Supabase (service role, server-only)" check={report.checks.supabaseAdmin} />
+        <CheckCard title={isLocal ? 'Primary database (Local SQLite)' : 'Supabase (public key)'} check={report.checks.supabase} />
+        <CheckCard title={isLocal ? 'Admin auth (Local Raspberry Pi)' : 'Supabase (service role, server-only)'} check={report.checks.supabaseAdmin} />
       </div>
 
       <p className="text-xs text-slate-500">Last checked {formatPhilippineDateTime(fetchedAt)} (PH time)</p>

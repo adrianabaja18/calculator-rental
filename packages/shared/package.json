@@ -5,7 +5,8 @@
   "description": "Shared TypeScript types, Zod schemas, constants and API contracts used by both the web app and the Raspberry Pi service.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./sqlite": "./src/sqlite-node.ts"
   },
   "types": "./src/index.ts",
   "scripts": {
@@ -15,6 +16,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@types/node": "^22.10.0",
     "typescript": "~5.9.3"
   }
 }

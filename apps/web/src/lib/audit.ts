@@ -1,19 +1,14 @@
 import 'server-only';
 import { ActorType } from '@calc-rental/shared';
+import { writeLocalAuditLog } from '@/lib/local-db';
+import { isLocalBackend } from '@/lib/mode';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import type { Json } from '@/lib/supabase/database.types';
 
-/**
- * Writes one row to the append-only audit_logs table (spec §30).
- *
- * Audit logging must never break the action being audited, so failures
- * are reported to the server log instead of thrown.
- */
 export interface AuditEntry {
   actorType: ActorType;
   actorId?: string | null;
   actorLabel?: string | null;
-  /** UPPER_SNAKE_CASE verb, e.g. LOGIN, SETTINGS_UPDATED, PENALTY_WAIVED */
   action: string;
   targetType?: string | null;
   targetId?: string | null;
@@ -24,6 +19,11 @@ export interface AuditEntry {
 
 export async function writeAuditLog(entry: AuditEntry): Promise<void> {
   try {
+    if (isLocalBackend()) {
+      writeLocalAuditLog(entry);
+      return;
+    }
+
     const admin = createSupabaseAdminClient();
     const { error } = await admin.from('audit_logs').insert({
       actor_type: entry.actorType,

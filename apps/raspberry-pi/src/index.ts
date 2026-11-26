@@ -1,9 +1,26 @@
 import fs from 'node:fs';
-import { APP_VERSION, EventSeverity, EventType, HEARTBEAT_INTERVAL_SECONDS, MAX_CLOCK_DRIFT_SECONDS } from '@calc-rental/shared';
+import {
+  APP_VERSION,
+  CalculatorCondition,
+  CalculatorStatus,
+  EventSeverity,
+  EventType,
+  HEARTBEAT_INTERVAL_SECONDS,
+  LockerStatus,
+  MAX_CLOCK_DRIFT_SECONDS,
+} from '@calc-rental/shared';
 import { BackendClient } from './backend/client';
 import { bridgeArgs, config } from './config';
+import { DEV_IDS, DEV_SETTINGS } from './db/dev-seed';
 import { KioskStore } from './db/kiosk-store';
-import { getLocalConfig, getSchemaVersion, openLocalDatabase, setLocalConfig } from './db/sqlite';
+import {
+  ensureDefaultLocalAdmin,
+  getLocalConfig,
+  getSchemaVersion,
+  openLocalDatabase,
+  setLocalConfig,
+  type LocalDatabase,
+} from './db/sqlite';
 import { createMockHardware } from './hardware/mock';
 import { BridgeClient } from './hardware/real/bridge-client';
 import {
@@ -25,20 +42,10 @@ import { RentalService } from './rental/rental-service';
 import { ReturnService } from './rental/return-service';
 import { SyncService } from './sync/sync-service';
 
-/**
- * Raspberry Pi kiosk service.
- *
- *   1. validates configuration and opens the local SQLite database (main DB),
- *   2. builds the hardware: HARDWARE_MODE=mock (laptop console) or real (Pi, via the Python bridge),
- *   3. runs the kiosk state machine (tick every 250 ms),
- *   4. syncs with Supabase (Phase 12: outbox push every 10 s, officer data pull every 60 s)
- *      and sends a device-authenticated heartbeat every 30 s,
- *   5. shuts down cleanly on Ctrl+C / systemd stop.
- */
-
 const TICK_MS = 250;
+const LOCAL_COMMAND_POLL_MS = 1000;
+const LOCAL_HEARTBEAT_MS = 10_000;
 
-/** Raspberry Pi CPU temperature in °C, or null on other machines. */
 function readCpuTemperature(): number | null {
   try {
     return Number(fs.readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8')) / 1000;
@@ -47,8 +54,55 @@ function readCpuTemperature(): number | null {
   }
 }
 
+/**
+ * Bootstraps initial settings, lockers (1 & 2), calculators (with the team's
+ * real RFID UIDs), and the default local Super Admin if `kiosk.db` is empty,
+ * so the Raspberry Pi 4 runs standalone right out of the box.
+ */
+function ensureStandaloneBootstrap(db: LocalDatabase, store: KioskStore): void {
+  const nowIso = new Date().toISOString();
+  store.transaction(() => {
+    if (!store.getSettings()) {
+      store.saveSettings({ ...DEV_SETTINGS, allowOfflineRentals: true }, nowIso);
+    }
+    const lockerCount = (db.prepare('SELECT COUNT(*) AS n FROM lockers').get() as { n: number }).n;
+    if (lockerCount === 0) {
+      const insLocker = db.prepare(
+        `INSERT INTO lockers (id, locker_number, name, hardware_channel, status, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      insLocker.run(DEV_IDS.locker1, 1, 'Locker 1', 1, LockerStatus.AVAILABLE, nowIso);
+      insLocker.run(DEV_IDS.locker2, 2, 'Locker 2', 2, LockerStatus.AVAILABLE, nowIso);
+    }
+    const calcCount = (db.prepare('SELECT COUNT(*) AS n FROM calculators').get() as { n: number }).n;
+    if (calcCount === 0) {
+      const l1 = db.prepare('SELECT id FROM lockers WHERE locker_number = 1').get() as { id: string } | undefined;
+      const l2 = db.prepare('SELECT id FROM lockers WHERE locker_number = 2').get() as { id: string } | undefined;
+      const insCalc = db.prepare(
+        `INSERT INTO calculators (id, code, model, rfid_uid, locker_id, status, condition, updated_at)
+         VALUES (?, ?, 'Casio fx-991EX ClassWiz', ?, ?, ?, ?, ?)`,
+      );
+      insCalc.run(DEV_IDS.calc1, 'CALC-001', 'FE-AC-31-03', l1?.id ?? null, CalculatorStatus.AVAILABLE, CalculatorCondition.GOOD, nowIso);
+      insCalc.run(DEV_IDS.calc2, 'CALC-002', '57-99-3B-03', l2?.id ?? null, CalculatorStatus.AVAILABLE, CalculatorCondition.GOOD, nowIso);
+    }
+  });
+
+  ensureDefaultLocalAdmin(db, {
+    email: process.env.LOCAL_ADMIN_EMAIL,
+    password: process.env.LOCAL_ADMIN_PASSWORD,
+    fullName: process.env.LOCAL_ADMIN_NAME,
+  });
+}
+
 async function main(): Promise<void> {
-  logger.info({ event: 'SERVICE_STARTING', version: APP_VERSION, hardwareMode: config.HARDWARE_MODE }, 'Kiosk service starting');
+  logger.info(
+    {
+      event: 'SERVICE_STARTING',
+      version: APP_VERSION,
+      hardwareMode: config.HARDWARE_MODE,
+      cloudSync: config.CLOUD_SYNC_ENABLED,
+    },
+    'Kiosk service starting',
+  );
 
   const db = openLocalDatabase(config.SQLITE_PATH);
   const bootCount = Number(getLocalConfig(db, 'boot_count') ?? '0') + 1;
@@ -58,25 +112,23 @@ async function main(): Promise<void> {
   logger.info({ event: 'SQLITE_READY', schemaVersion: getSchemaVersion(db), bootCount }, 'Local SQLite database ready');
 
   const store = new KioskStore(db);
-  if (!store.getSettings()) {
-    logger.warn({ event: 'SYSTEM_ERROR' }, 'No settings in the kiosk database yet. For development run: npm run seed:pi');
-  }
+  ensureStandaloneBootstrap(db, store);
 
-  // The ESP32-CAM scanner (Phase 10) works in both modes.
   const serialScanner =
     config.QR_SCANNER === 'serial'
       ? new SerialQRScanner(config.SCANNER_PORT, (level, message, data) => logger[level]({ event: 'QR_SCANNER', ...data }, message))
       : null;
 
-  // Mock mode: a clock the console can move forward to try late returns. Real mode: the system clock.
-  let offsetMs = 0;
-  const now = () => new Date(Date.now() + offsetMs);
+  let consoleOffsetMs = 0;
+  let browserClockOffsetMs = Number(getLocalConfig(db, 'clock_offset_ms') ?? '0') || 0;
+  const isOfficerClockTrusted = () => getLocalConfig(db, 'clock_trusted_boot_count') === String(bootCount);
+  const now = () => new Date(Date.now() + browserClockOffsetMs + consoleOffsetMs);
+
   const mock = createMockHardware(printLcd);
   let bridge: BridgeClient | null = null;
   let hardware: Hardware;
 
   if (config.HARDWARE_MODE === 'real') {
-    // Phase 11: relays, coin pulses, RC522 readers, LCD and buzzer through the Python bridge.
     bridge = new BridgeClient({
       pythonBin: config.PYTHON_BIN,
       args: bridgeArgs(config),
@@ -94,11 +146,11 @@ async function main(): Promise<void> {
       buttons: new BridgeButtons(bridge),
       display: new BridgeDisplay(bridge, config.LOG_PRETTY ? printLcd : undefined),
       buzzer: new BridgeBuzzer(bridge),
-      clock: new SystemClock(),
+      clock: new SystemClock(() => !config.REQUIRE_NTP_SYNC || isOfficerClockTrusted()),
     };
   } else {
     for (const locker of store.listLockerHardware()) {
-      if (locker.expectedUid) mock.rfid.place(locker.channel, locker.expectedUid); // calculators start inside
+      if (locker.expectedUid) mock.rfid.place(locker.channel, locker.expectedUid);
     }
     hardware = { ...mock, scanner: serialScanner ?? mock.scanner };
   }
@@ -108,7 +160,6 @@ async function main(): Promise<void> {
   const returns = new ReturnService(store, payments, { now });
   const kiosk = new KioskController(store, hardware, { rentals, payments, returns }, {
     now,
-    // Power saving: idle → LCD backlight, ESP32-CAM camera and RFID readers off; any button wakes it.
     sleepAfterMs: config.POWER_SAVE ? config.SLEEP_AFTER_SECONDS * 1000 : 0,
     closedSleepAfterMs: config.CLOSED_SLEEP_AFTER_SECONDS * 1000,
     log: (level, message, data) => logger[level]({ event: 'KIOSK', ...data }, message),
@@ -116,36 +167,83 @@ async function main(): Promise<void> {
   await kiosk.start();
   serialScanner?.start();
   const ticker = setInterval(() => void kiosk.tick(), TICK_MS);
-  // Keyboard console only with simulated hardware (the real kiosk has no keyboard).
   const console_ =
     config.HARDWARE_MODE === 'mock'
-      ? startMockConsole({ hw: mock, kiosk, store, addMinutes: (m) => (offsetMs += m * 60_000) })
+      ? startMockConsole({ hw: mock, kiosk, store, addMinutes: (m) => (consoleOffsetMs += m * 60_000) })
       : null;
 
-  const backend = new BackendClient({
-    baseUrl: config.BACKEND_URL,
-    timeoutMs: config.HTTP_TIMEOUT_MS,
-    deviceId: config.DEVICE_ID,
-    deviceSecret: config.DEVICE_SECRET,
-  });
-  const sync = new SyncService(store, backend, {
-    now,
-    log: (level, message, data) => logger[level]({ event: 'SYNC', ...data }, message),
-  });
-  // Phase 13: emergency unlock requested by an officer on the Devices page.
-  sync.onCommand(async (cmd) => {
-    const lockerId = typeof cmd.payload.lockerId === 'string' ? cmd.payload.lockerId : '';
-    const requestedBy = typeof cmd.payload.requestedBy === 'string' ? cmd.payload.requestedBy : undefined;
-    const result = await kiosk.handleOfficerUnlock(lockerId, { commandId: cmd.id, requestedBy });
-    return { status: result.ok ? 'DONE' : 'FAILED', message: result.message };
-  });
-  sync.start();
+  // Optional outbound cloud sync for online read-only monitoring.
+  const cloudUrl = config.CLOUD_BACKEND_URL || config.BACKEND_URL;
+  const backend = config.CLOUD_SYNC_ENABLED
+    ? new BackendClient({
+        baseUrl: cloudUrl,
+        timeoutMs: config.HTTP_TIMEOUT_MS,
+        deviceId: config.DEVICE_ID,
+        deviceSecret: config.DEVICE_SECRET,
+      })
+    : null;
 
-  let backendOnline: boolean | null = null;
+  const sync = backend
+    ? new SyncService(store, backend, {
+        now,
+        pullEnabled: config.SYNC_PULL_ENABLED,
+        log: (level, message, data) => logger[level]({ event: 'SYNC', ...data }, message),
+      })
+    : null;
+
+  if (sync) {
+    sync.onCommand(async (cmd) => {
+      const lockerId = typeof cmd.payload.lockerId === 'string' ? cmd.payload.lockerId : '';
+      const requestedBy = typeof cmd.payload.requestedBy === 'string' ? cmd.payload.requestedBy : undefined;
+      const result = await kiosk.handleOfficerUnlock(lockerId, { commandId: cmd.id, requestedBy });
+      return { status: result.ok ? 'DONE' : 'FAILED', message: result.message };
+    });
+    sync.start();
+  }
+
+  // Poll local SQLite commands + officer browser clock offset every 1 s.
+  let runningLocalCommands = false;
+  const pollLocalCommands = async () => {
+    if (runningLocalCommands) return;
+    runningLocalCommands = true;
+    try {
+      browserClockOffsetMs = Number(getLocalConfig(db, 'clock_offset_ms') ?? '0') || 0;
+      const cmds = store.claimLocalCommands(now().toISOString());
+      for (const cmd of cmds) {
+        if (cmd.command === 'UNLOCK_LOCKER') {
+          const lockerId = typeof cmd.payload.lockerId === 'string' ? cmd.payload.lockerId : '';
+          const requestedBy = typeof cmd.payload.requestedBy === 'string' ? cmd.payload.requestedBy : undefined;
+          const res = await kiosk.handleOfficerUnlock(lockerId, { commandId: cmd.id, requestedBy });
+          store.completeLocalCommand(cmd.id, res.ok ? 'DONE' : 'FAILED', res.message, now().toISOString());
+        } else if (cmd.command === 'REFRESH') {
+          if (sync) {
+            const pushed = await sync.push();
+            store.completeLocalCommand(
+              cmd.id,
+              pushed.ok ? 'DONE' : 'FAILED',
+              pushed.ok ? `Uploaded ${pushed.sent} pending item(s) to cloud.` : 'Cloud sync unreachable; queued in SQLite.',
+              now().toISOString(),
+            );
+          } else {
+            store.completeLocalCommand(
+              cmd.id,
+              'DONE',
+              'Local SQLite is live (set CLOUD_SYNC_ENABLED=true in .env for online cloud sync).',
+              now().toISOString(),
+            );
+          }
+        }
+      }
+    } finally {
+      runningLocalCommands = false;
+    }
+  };
+  const localCmdTimer = setInterval(() => void pollLocalCommands(), LOCAL_COMMAND_POLL_MS);
+
+  // Write live kiosk heartbeat straight to local SQLite every 10 s so the local Pi dashboard sees it offline.
   let lastHeatWarning = 0;
-  const heartbeat = async () => {
+  const writeLocalHeartbeat = async () => {
     const cpuTempC = readCpuTemperature();
-    // Overheating watch: one event per 30 min while hot (the Pi throttles itself at 80 °C).
     if (cpuTempC !== null && cpuTempC >= 75 && Date.now() - lastHeatWarning > 30 * 60_000) {
       lastHeatWarning = Date.now();
       const critical = cpuTempC >= 80;
@@ -158,6 +256,38 @@ async function main(): Promise<void> {
       });
       logger.warn({ event: 'SYSTEM_ERROR', cpuTempC }, 'Raspberry Pi is running hot');
     }
+
+    const clockSynced = await hardware.clock.isSynced();
+    setLocalConfig(
+      db,
+      'kiosk_heartbeat',
+      JSON.stringify({
+        lastHeartbeatAt: new Date().toISOString(),
+        softwareVersion: APP_VERSION,
+        kioskState: kiosk.state,
+        cpuTempC,
+        clockDriftSeconds: 0,
+        localDbOk: db.pragma('quick_check', { simple: true }) === 'ok',
+        clockSynced,
+        sync: sync
+          ? sync.status()
+          : {
+              lastPushAt: null,
+              lastPullAt: null,
+              lastError: null,
+              failedItems: store.failedSyncCount(),
+            },
+      }),
+    );
+  };
+  await writeLocalHeartbeat();
+  const localBeatTimer = setInterval(() => void writeLocalHeartbeat(), LOCAL_HEARTBEAT_MS);
+
+  // Optional remote cloud heartbeat (every 30 s when CLOUD_SYNC_ENABLED=true).
+  let backendOnline: boolean | null = null;
+  const cloudHeartbeat = async () => {
+    if (!backend || !sync) return;
+    const cpuTempC = readCpuTemperature();
     const result = await backend.heartbeat({
       softwareVersion: APP_VERSION,
       kioskState: kiosk.state,
@@ -169,16 +299,16 @@ async function main(): Promise<void> {
       sync: sync.status(),
     });
     if (result.ok !== backendOnline) {
-      if (result.ok) logger.info({ event: 'DEVICE_ONLINE', latencyMs: result.latencyMs }, 'Backend reachable, heartbeat accepted');
-      else logger.warn({ event: 'DEVICE_OFFLINE', code: result.code }, `${result.message} (kiosk keeps working offline)`);
+      if (result.ok) logger.info({ event: 'DEVICE_ONLINE', latencyMs: result.latencyMs }, 'Cloud monitor reachable, heartbeat accepted');
+      else logger.warn({ event: 'DEVICE_OFFLINE', code: result.code }, `${result.message} (local kiosk & local dashboard unaffected)`);
       backendOnline = result.ok;
     }
     if (result.ok && Math.abs(result.data.clockDriftSeconds) > MAX_CLOCK_DRIFT_SECONDS) {
-      logger.warn({ event: 'SYSTEM_ERROR', clockDriftSeconds: result.data.clockDriftSeconds }, 'Kiosk clock differs from the server');
+      logger.warn({ event: 'SYSTEM_ERROR', clockDriftSeconds: result.data.clockDriftSeconds }, 'Kiosk clock differs from cloud server');
     }
   };
-  await heartbeat();
-  const connectivity = setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL_SECONDS * 1000);
+  if (backend) void cloudHeartbeat();
+  const cloudBeatTimer = backend ? setInterval(() => void cloudHeartbeat(), HEARTBEAT_INTERVAL_SECONDS * 1000) : null;
 
   let shuttingDown = false;
   const shutdown = (signal: string) => {
@@ -186,19 +316,23 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info({ event: 'SERVICE_STOPPING', signal }, 'Shutting down');
     clearInterval(ticker);
-    clearInterval(connectivity);
-    sync.stop();
+    clearInterval(localCmdTimer);
+    clearInterval(localBeatTimer);
+    if (cloudBeatTimer) clearInterval(cloudBeatTimer);
+    sync?.stop();
     console_?.close();
     bridge?.stop();
     serialScanner?.stop();
-    db.close(); // checkpoints the WAL; safe to power off afterwards
+    db.close();
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   logger.info(
     { event: 'SERVICE_READY', qrScanner: config.QR_SCANNER === 'serial' ? config.SCANNER_PORT : 'mock' },
-    config.HARDWARE_MODE === 'mock' ? 'Kiosk running on SIMULATED hardware. Type "help" for controls, Ctrl+C to stop.' : 'Kiosk running on REAL hardware.',
+    config.HARDWARE_MODE === 'mock'
+      ? 'Kiosk running on SIMULATED hardware (local SQLite). Type "help" for controls, Ctrl+C to stop.'
+      : 'Kiosk running on REAL hardware (local SQLite).',
   );
 }
 

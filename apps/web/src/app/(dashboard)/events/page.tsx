@@ -6,9 +6,9 @@ import { StatusBadge } from '@/components/status-badge';
 import { EmptyRow, Sub, TableCard, Td, Th } from '@/components/ui/data-table';
 import { FilterBar } from '@/components/ui/filter-bar';
 import { requireAdmin } from '@/lib/auth/session';
+import { queryEventLogs } from '@/lib/data/queries';
 import { cleanSearch, formatDateTime } from '@/lib/format';
 import { humanize, toneFor } from '@/lib/status-tones';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 export const metadata: Metadata = { title: 'Event Logs' };
 
@@ -34,24 +34,7 @@ export default async function EventLogsPage({
   const severity = (SEVERITIES as string[]).includes(params.status ?? '') ? (params.status as EventSeverity) : '';
   const type = (TYPES as string[]).includes(params.type ?? '') ? (params.type as EventType) : '';
 
-  const supabase = await createSupabaseServerClient();
-  let query = supabase
-    .from('device_events')
-    .select('id, event_type, severity, message, payload, occurred_at, synced_at, locker_id, transaction_id')
-    .order('occurred_at', { ascending: false })
-    .limit(PAGE_LIMIT);
-  if (q) query = query.ilike('message', `%${q}%`);
-  if (severity) query = query.eq('severity', severity);
-  if (type) query = query.eq('event_type', type);
-  const [{ data: events, error }, { data: lockers }] = await Promise.all([query, supabase.from('lockers').select('id, name')]);
-  if (error) throw new Error('Failed to load events');
-
-  const lockerName = new Map((lockers ?? []).map((l) => [l.id, l.name]));
-  const rentalIds = [...new Set(events.map((e) => e.transaction_id).filter((id): id is string => !!id))];
-  const { data: rentals } = rentalIds.length
-    ? await supabase.from('rental_transactions').select('id, transaction_code').in('id', rentalIds)
-    : { data: [] };
-  const rentalCode = new Map((rentals ?? []).map((r) => [r.id, r.transaction_code]));
+  const events = await queryEventLogs({ q, severity, type, limit: PAGE_LIMIT });
   const problems = events.filter((e) => e.severity === 'ERROR' || e.severity === 'CRITICAL').length;
 
   return (
@@ -90,35 +73,32 @@ export default async function EventLogsPage({
             <EmptyRow
               colSpan={6}
               title={q || severity || type ? 'No events match your filters' : 'No events yet'}
-              hint="Events appear after the kiosk syncs."
+              hint="Events appear as the kiosk operates."
             />
           )}
-          {events.map((e) => {
-            const payload = e.payload && typeof e.payload === 'object' && Object.keys(e.payload).length > 0 ? e.payload : null;
-            return (
-              <tr key={e.id} className={rowTone[e.severity] ?? 'hover:bg-slate-50'}>
-                <Td className="whitespace-nowrap">
-                  {formatDateTime(e.occurred_at)}
-                  <Sub>synced {formatDateTime(e.synced_at)}</Sub>
-                </Td>
-                <Td>
-                  <StatusBadge tone={toneFor(e.severity)}>{humanize(e.severity)}</StatusBadge>
-                </Td>
-                <Td className="whitespace-nowrap">{humanize(e.event_type)}</Td>
-                <Td>
-                  {e.message ?? '—'}
-                  {payload && (
-                    <details className="mt-1">
-                      <summary className="cursor-pointer text-xs text-slate-500">Details</summary>
-                      <pre className="mt-1 max-w-md overflow-x-auto rounded bg-slate-50 p-2 text-xs text-slate-700">{JSON.stringify(payload, null, 2)}</pre>
-                    </details>
-                  )}
-                </Td>
-                <Td>{e.locker_id ? (lockerName.get(e.locker_id) ?? '—') : '—'}</Td>
-                <Td className="whitespace-nowrap">{e.transaction_id ? (rentalCode.get(e.transaction_id) ?? '—') : '—'}</Td>
-              </tr>
-            );
-          })}
+          {events.map((e) => (
+            <tr key={e.id} className={rowTone[e.severity] ?? 'hover:bg-slate-50'}>
+              <Td className="whitespace-nowrap">
+                {formatDateTime(e.occurred_at)}
+                {e.synced_at && <Sub>synced {formatDateTime(e.synced_at)}</Sub>}
+              </Td>
+              <Td>
+                <StatusBadge tone={toneFor(e.severity)}>{humanize(e.severity)}</StatusBadge>
+              </Td>
+              <Td className="whitespace-nowrap">{humanize(e.event_type)}</Td>
+              <Td>
+                {e.message ?? '—'}
+                {e.payload && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-xs text-slate-500">Details</summary>
+                    <pre className="mt-1 max-w-md overflow-x-auto rounded bg-slate-50 p-2 text-xs text-slate-700">{JSON.stringify(e.payload, null, 2)}</pre>
+                  </details>
+                )}
+              </Td>
+              <Td>{e.locker_name ?? '—'}</Td>
+              <Td className="whitespace-nowrap">{e.transaction_code ?? '—'}</Td>
+            </tr>
+          ))}
         </tbody>
       </TableCard>
     </>

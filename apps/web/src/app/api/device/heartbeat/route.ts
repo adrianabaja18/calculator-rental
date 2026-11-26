@@ -1,4 +1,6 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import {
+  DEVICE_ID_HEADER,
   ErrorCode,
   EventSeverity,
   EventType,
@@ -8,22 +10,32 @@ import {
 } from '@calc-rental/shared';
 import { authenticateDevice } from '@/lib/device-auth';
 import { jsonError, jsonOk } from '@/lib/http';
+import { getLocalConfig, getLocalDb, setLocalConfig } from '@/lib/local-db';
+import { isLocalBackend } from '@/lib/mode';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
-/**
- * POST /api/device/heartbeat  — kiosk → backend every 30 s (spec §32).
- *
- * Records the kiosk as alive (v_device_status turns ONLINE) with its software
- * version, kiosk state, sync backlog and CPU temperature, and returns the
- * server clock so the kiosk can detect drift (no RTC on the Pi).
- */
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(request: Request) {
-  const auth = await authenticateDevice(request);
-  if (!auth.ok) return auth.response;
+function verifyLocalDeviceRequest(request: Request): { ok: true; deviceCode: string } | { ok: false; response: Response } {
+  const deviceCode = request.headers.get(DEVICE_ID_HEADER)?.trim() ?? '';
+  const authHeader = request.headers.get('authorization') ?? '';
+  const secret = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
 
+  const db = getLocalDb();
+  const expectedDevice = getLocalConfig(db, 'device_id') ?? process.env.DEVICE_ID?.trim() ?? 'DEVICE-CALC-KIOSK-001';
+  const expectedSecret = process.env.DEVICE_SECRET?.trim() || 'dev-only-placeholder-secret-change-me';
+
+  const actualHash = createHash('sha256').update(secret).digest();
+  const expectedHash = createHash('sha256').update(expectedSecret).digest();
+
+  if (!deviceCode || deviceCode !== expectedDevice || !timingSafeEqual(actualHash, expectedHash)) {
+    return { ok: false, response: jsonError(ErrorCode.UNAUTHORIZED, 'Invalid device credentials.', 401) };
+  }
+  return { ok: true, deviceCode };
+}
+
+export async function POST(request: Request) {
   let body: unknown;
   try {
     body = await request.json();
@@ -36,6 +48,45 @@ export async function POST(request: Request) {
 
   const serverNow = new Date();
   const clockDriftSeconds = Math.round((new Date(beat.sentAt).getTime() - serverNow.getTime()) / 1000);
+
+  if (isLocalBackend()) {
+    const auth = verifyLocalDeviceRequest(request);
+    if (!auth.ok) return auth.response;
+
+    const db = getLocalDb();
+    db.transaction(() => {
+      setLocalConfig(
+        db,
+        'kiosk_heartbeat',
+        JSON.stringify({
+          lastHeartbeatAt: serverNow.toISOString(),
+          softwareVersion: beat.softwareVersion,
+          kioskState: beat.kioskState,
+          cpuTempC: beat.cpuTempC,
+          clockDriftSeconds,
+          localDbOk: beat.localDbOk,
+          sync: beat.sync ?? null,
+        }),
+      );
+      for (const l of beat.lockers ?? []) {
+        db.prepare(
+          `UPDATE lockers SET lock_state = ?, door_state = ?, rfid_state = ?, last_detected_rfid_uid = ?, last_seen_at = ?
+           WHERE id = ?`,
+        ).run(l.lockState, l.doorState, l.rfidState, l.detectedRfidUid, l.lastSeenAt, l.id);
+      }
+    })();
+
+    const reply: HeartbeatReply = {
+      deviceCode: auth.deviceCode,
+      serverTime: serverNow.toISOString(),
+      clockDriftSeconds,
+    };
+    return jsonOk(reply, { headers: { 'Cache-Control': 'no-store' } });
+  }
+
+  const auth = await authenticateDevice(request);
+  if (!auth.ok) return auth.response;
+
   const clockOk = Math.abs(clockDriftSeconds) <= MAX_CLOCK_DRIFT_SECONDS;
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null;
 
@@ -56,8 +107,6 @@ export async function POST(request: Request) {
     .eq('id', auth.device.id);
   if (error) return jsonError(ErrorCode.DATABASE_UNAVAILABLE, 'Could not record heartbeat.', 503);
 
-  // Live sensor state (Phase 12): only the latest reading matters, so it rides on
-  // the heartbeat instead of filling the outbox. Only this kiosk's lockers.
   await Promise.all(
     (beat.lockers ?? []).map((l) =>
       db

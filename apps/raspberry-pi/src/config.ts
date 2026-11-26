@@ -3,8 +3,6 @@ import { z } from 'zod';
 
 /**
  * Loads apps/raspberry-pi/.env and validates it ONCE at startup.
- * If anything is wrong the process stops immediately with a clear message,
- * instead of failing later in the middle of a rental.
  */
 dotenv.config({ quiet: true });
 
@@ -19,17 +17,34 @@ const booleanTrue = z
   .transform((value) => value === 'true');
 
 const ConfigSchema = z.object({
-  BACKEND_URL: z.url({ message: 'BACKEND_URL must be a full URL, e.g. http://localhost:3000' }),
+  BACKEND_URL: z.url({ message: 'BACKEND_URL must be a full URL, e.g. http://localhost:3000' }).default('http://localhost:3000'),
+  /** Optional remote cloud monitoring URL (e.g. Vercel). Falls back to BACKEND_URL when CLOUD_SYNC_ENABLED=true. */
+  CLOUD_BACKEND_URL: z
+    .string()
+    .optional()
+    .default('')
+    .refine((v) => v === '' || z.url().safeParse(v).success, {
+      message: 'CLOUD_BACKEND_URL must be empty or a valid URL',
+    }),
+  /** Push local SQLite outbox + heartbeats to the online read-only monitoring dashboard. */
+  CLOUD_SYNC_ENABLED: booleanString,
+  /** Keep false when the Raspberry Pi local dashboard is the single authority (one-way push to cloud). */
+  SYNC_PULL_ENABLED: booleanString,
+  /** When false, the Pi trusts its clock offline (or an officer's browser clock sync) without waiting for internet NTP. */
+  REQUIRE_NTP_SYNC: booleanString,
   DEVICE_ID: z
     .string()
-    .regex(/^DEVICE-[A-Z0-9-]+$/, { message: 'DEVICE_ID must look like DEVICE-CALC-KIOSK-001' }),
-  DEVICE_SECRET: z.string().min(16, { message: 'DEVICE_SECRET must be at least 16 characters' }),
+    .regex(/^DEVICE-[A-Z0-9-]+$/, { message: 'DEVICE_ID must look like DEVICE-CALC-KIOSK-001' })
+    .default('DEVICE-CALC-KIOSK-001'),
+  DEVICE_SECRET: z
+    .string()
+    .min(16, { message: 'DEVICE_SECRET must be at least 16 characters' })
+    .default('dev-only-placeholder-secret-change-me'),
   SQLITE_PATH: z.string().min(1).default('./data/kiosk.db'),
   HARDWARE_MODE: z.enum(['mock', 'real']).default('mock'),
-  /** mock = keyboard console; serial = ESP32-CAM on SCANNER_PORT (Phase 10). */
   QR_SCANNER: z.enum(['mock', 'serial']).default('mock'),
   SCANNER_PORT: z.string().min(1).default('/dev/ttyUSB0'),
-  // ---- Real hardware (HARDWARE_MODE=real, Phase 11). Pins are BCM numbers. ----
+  // ---- Real hardware (HARDWARE_MODE=real). Pins are BCM numbers. ----
   PYTHON_BIN: z.string().min(1).default(process.platform === 'win32' ? 'python' : 'python3'),
   RELAY_PINS: z.string().regex(/^\d+(,\d+)*$/).default('5,6'),
   RELAY_ACTIVE_LOW: booleanTrue,
@@ -39,14 +54,12 @@ const ConfigSchema = z.object({
   BUZZER_PIN: z.coerce.number().int().min(0).max(27).default(18),
   BUZZER_ACTIVE_LOW: booleanString,
   RFID_SPI: z.string().regex(/^\d\.\d(,\d\.\d)*$/).default('0.0,0.1'),
-  /** RC522 RST pins (final wiring: GPIO 4 and 16); empty = RST tied to 3.3 V. */
   RFID_RST_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('4,16'),
   I2C_BUS: z.coerce.number().int().min(0).max(10).default(1),
   LCD_I2C_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{2}$/).default('0x27'),
   DOOR_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default(''),
   SELECT_BUTTON_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('24,25'),
   CLOSE_BUTTON_PINS: z.string().regex(/^(\d+(,\d+)*)?$/).default('22,23'),
-  /** Power saving: sleep when idle (LCD backlight, ESP32-CAM camera, RFID readers off). */
   POWER_SAVE: booleanTrue,
   SLEEP_AFTER_SECONDS: z.coerce.number().int().min(15).max(3600).default(120),
   CLOSED_SLEEP_AFTER_SECONDS: z.coerce.number().int().min(10).max(3600).default(30),
@@ -54,7 +67,6 @@ const ConfigSchema = z.object({
   LOG_PRETTY: booleanString,
   HTTP_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(8000),
 }).superRefine((c, ctx) => {
-  // Two devices on one GPIO pin would fail inside the bridge; say so clearly instead.
   const pins = (s: string) => s.split(',').filter(Boolean).map(Number);
   const used = new Map<number, string>();
   const claims: Array<[string, number[]]> = [
@@ -83,7 +95,6 @@ function loadConfig(): PiConfig {
     const problems = parsed.error.issues
       .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
       .join('\n');
-    // Logger is not available yet (it depends on config), so print directly.
     console.error(
       `\n[config] Invalid Raspberry Pi configuration:\n${problems}\n\n` +
         'Copy apps/raspberry-pi/.env.example to apps/raspberry-pi/.env and fix the values above.\n',
@@ -95,7 +106,6 @@ function loadConfig(): PiConfig {
 
 export const config: PiConfig = loadConfig();
 
-/** Command-line arguments for hw-bridge/hw_bridge.py built from the .env settings. */
 export function bridgeArgs(c: PiConfig, options: { mock?: boolean } = {}): string[] {
   return [
     ...(options.mock ? ['--mock'] : []),

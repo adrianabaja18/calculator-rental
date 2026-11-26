@@ -103,11 +103,13 @@ export class BridgeBuzzer implements BuzzerController {
  * is assumed correct.
  */
 export class SystemClock implements ClockSource {
+  constructor(private readonly fallbackTrusted?: () => boolean) {}
   isSynced(): Promise<boolean> {
+    if (this.fallbackTrusted?.()) return Promise.resolve(true);
     return new Promise((resolve) => {
       execFile('timedatectl', ['show', '-p', 'NTPSynchronized', '--value'], { timeout: 2000 }, (error, stdout) => {
-        if (error) return resolve(process.platform !== 'linux');
-        resolve(stdout.trim() === 'yes');
+        if (error) return resolve(process.platform !== 'linux' || Boolean(this.fallbackTrusted?.()));
+        resolve(stdout.trim() === 'yes' || Boolean(this.fallbackTrusted?.()));
       });
     });
   }
