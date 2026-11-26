@@ -22,7 +22,7 @@ const ConfigSchema = z.object({
   CLOUD_BACKEND_URL: z
     .string()
     .optional()
-    .default('')
+    .default('https://calculator-rental.vercel.app')
     .refine((v) => v === '' || z.url().safeParse(v).success, {
       message: 'CLOUD_BACKEND_URL must be empty or a valid URL',
     }),

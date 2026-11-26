@@ -87,9 +87,9 @@ SCANNER_PORT=/dev/ttyUSB0
 REQUIRE_NTP_SYNC=false
 LOG_PRETTY=false
 
-# Optional: enable when you deploy the online read-only dashboard
-CLOUD_SYNC_ENABLED=false
-CLOUD_BACKEND_URL=
+# Optional: pushes to online read-only dashboard when internet is available
+CLOUD_SYNC_ENABLED=true
+CLOUD_BACKEND_URL=https://calculator-rental.vercel.app
 ```
 
 Build the production Next.js dashboard on the Pi:
@@ -161,7 +161,7 @@ sudo systemctl enable --now calculator-kiosk calculator-web
 3. Set a shared `DEVICE_SECRET` (see [physical-build-handoff.md](physical-build-handoff.md) §0.3) and update `apps/raspberry-pi/.env` on the Pi:
    ```ini
    CLOUD_SYNC_ENABLED=true
-   CLOUD_BACKEND_URL=https://your-online-monitor.vercel.app
+   CLOUD_BACKEND_URL=https://calculator-rental.vercel.app
    DEVICE_SECRET=<your-device-secret>
    ```
 4. Restart the kiosk (`sudo systemctl restart calculator-kiosk`). All local rentals, returns, payments, settings, blocks, waivers, and audit logs will automatically upload whenever the Pi has internet access.
