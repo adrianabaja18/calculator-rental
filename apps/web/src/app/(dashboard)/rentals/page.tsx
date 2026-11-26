@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { OUTSTANDING_RENTAL_STATUSES } from '@calc-rental/shared';
+import { OUTSTANDING_RENTAL_STATUSES, operatingCalendar, systemSettingsFromRow } from '@calc-rental/shared';
 import { LiveRefresh } from '@/components/live-refresh';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
@@ -17,12 +17,13 @@ const LIVE_TABLES = ['rental_transactions', 'penalties'] as const;
 export default async function ActiveRentalsPage() {
   await requireAdmin();
   const supabase = await createSupabaseServerClient();
-  const { data: rentals, error } = await supabase
-    .from('v_rentals')
-    .select('*')
-    .in('status', [...OUTSTANDING_RENTAL_STATUSES])
-    .order('due_at', { ascending: true });
+  const [{ data: rentals, error }, { data: settingsRow }] = await Promise.all([
+    supabase.from('v_rentals').select('*').in('status', [...OUTSTANDING_RENTAL_STATUSES]).order('due_at', { ascending: true }),
+    supabase.from('system_settings').select('*').eq('id', 1).single(),
+  ]);
   if (error) throw new Error('Failed to load active rentals');
+  // Countdowns follow the operating hours (time while closed doesn't count).
+  const calendar = operatingCalendar(settingsRow ? systemSettingsFromRow(settingsRow) : {});
 
   const overdue = rentals.filter((r) => r.effective_status === 'OVERDUE').length;
 
@@ -72,7 +73,7 @@ export default async function ActiveRentalsPage() {
               <Td>{r.locker_name}</Td>
               <Td className="whitespace-nowrap">{formatDateTime(r.rented_at)}</Td>
               <Td className="whitespace-nowrap">{formatDateTime(r.due_at)}</Td>
-              <Td>{r.due_at ? <Countdown dueAt={r.due_at} /> : '—'}</Td>
+              <Td>{r.due_at ? <Countdown dueAt={r.due_at} calendar={calendar} /> : '—'}</Td>
               <Td>
                 <StatusBadge tone={toneFor(r.effective_status)}>{r.effective_status ?? ''}</StatusBadge>
                 {Number(r.penalty_amount_due) > 0 && <Sub>Penalty due {formatPeso(r.penalty_amount_due)}</Sub>}

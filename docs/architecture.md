@@ -104,6 +104,12 @@ Why not one global secret in `.env`? Per-device credentials can be revoked indiv
 ### 3.7 Time
 All databases store **UTC** (`timestamptz` in PostgreSQL, ISO-8601 strings in SQLite). Only the UI and the LCD convert to `Asia/Manila`, using helpers in `packages/shared/src/time.ts`.
 
+**Operating hours (decided 2026-11-27).** Settings define the opening hours (default Mon–Fri 9:00–17:00 Manila), closed dates, and `pauseClockOutsideHours` (default on).
+- **Borrowing** is refused outside operating hours (`KIOSK_CLOSED`, LCD `KIOSK CLOSED / OPEN WED 9:00AM`). **Returns** are always accepted.
+- With pausing on, **due time** = rented_at + duration counted only in open hours (`addOperatingMinutes`), and **lateness** = open minutes after due_at (`operatingMinutesBetween`). This replaces "late time keeps counting overnight". Example: rented Tue 15:00 for 3 h → due Wed 10:00.
+- The same rule runs on the kiosk (TypeScript, `packages/shared/src/rental/operating-hours.ts`) and in Supabase (`operating_minutes_between()`, used by `v_rentals.overdue_minutes_now`). Tests check that both give the same answers. Manila has no DST, so it's always UTC+8.
+- A rental keeps the settings snapshot from when it started.
+
 With SQLite-first, the **Pi's clock** sets `rented_at` and `due_at`. The Pi 4 has no battery-backed clock, so:
 - On boot, the kiosk stays in a **STARTING / "Please wait"** state until the system clock has synced over the internet (NTP). Only then does it accept rentals.
 - When syncing, the server compares the Pi's clock with its own and records any drift as a `WARNING` device event.
@@ -136,6 +142,35 @@ The kiosk must keep working 24/7 even if the internet drops, so the **Pi's SQLit
 **Assumption:** one kiosk. With several kiosks offline at the same time, one student could borrow from each. Supabase's one-open-rental rule would reject the second rental at sync time and flag it for officers.
 
 **Power-off safety:** SQLite runs in WAL mode with `synchronous=FULL`, so committed records survive a power cut. Pulling the plug can still damage the SD card's file system, so Phase 15 adds a safe-shutdown button or a read-only root file system.
+
+### 3.9 Two-way sync as built (Phase 12)
+```
+ KIOSK (SQLite)                                  SUPABASE
+ every change ─► sync_queue (outbox)
+ every 10 s:  POST /api/device/sync  ─────────►  apply_kiosk_sync(): items applied IN ORDER,
+              {items:[{seq,entity,payload}]}     one sub-transaction each; reply says how far
+              ◄─── {appliedThroughSeq, failure}   it got → kiosk marks those synced
+ every 60 s:  GET  /api/device/sync  ─────────►  settings + this kiosk's lockers + calculators
+              ?students=…&penalties=…            (complete) + students/penalties changed since
+              ◄─── officer data (paged)           the cursors → kiosk.applyPull()
+ every 30 s:  POST /api/device/heartbeat  ────►  online status, sync health, live locker sensors
+```
+**Outbox entities:** `student`, `rental`, `payment`, `penalty`, `coin_event`, `device_event`, `locker_state`, `calculator_state`. Each payload is the full SQLite row at the time of the change, so re-sending is harmless.
+
+**Who wins (field ownership)**
+| Kiosk owns | Officers own (dashboard) |
+|---|---|
+| Rentals, payments, coins, device events | Settings |
+| Student name/course (from their ID scans), new students | Student status and blocked reason |
+| Penalty amounts and coin payments | Penalty **waivers** (merged: `calculated − waived − paid`) |
+| Workflow statuses: locker RESERVED/OPEN/RENTED/RETURNING/AVAILABLE, calculator RENTED/AVAILABLE | Locker number/name/channel; calculator code/model/**RFID UID**/locker/condition |
+| Live sensor state (via heartbeat) | Out-of-service statuses: locker MAINTENANCE, calculator MAINTENANCE/MISSING/DISABLED |
+
+- The kiosk's `AVAILABLE` never ends an officer's maintenance. A workflow status (the locker is actually in use) is always recorded.
+- On the kiosk, an officer status is applied only when no rental is using that locker or calculator.
+- A rental an officer resolved by hand (`resolved_by`) is never overwritten by the kiosk.
+
+**Failures:** if Supabase refuses an item, nothing after it is applied, and the kiosk retries it with back-off (10 s, 20 s, 40 s … up to 10 min). After 20 attempts the item is set aside (`failed_at`), a CRITICAL `SYNC_FAILED` event is logged, and the rest continue. The heartbeat reports `failedItems`, which marks the device DEGRADED on the dashboard. Synced outbox rows are deleted after 7 days.
 
 ## 4. Folder structure
 

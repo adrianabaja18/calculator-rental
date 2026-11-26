@@ -2,7 +2,7 @@
 
 > **Read this first if you are joining the project.** It is updated at the end of every phase.
 >
-> **Last updated:** 2026-11-19, end of **Phase 11** (real hardware drivers)
+> **Last updated:** 2026-11-27, **operating hours** and **power saving** added after Phase 14
 
 ---
 
@@ -46,11 +46,13 @@ The deeper design is in [architecture.md](architecture.md), [database.md](databa
 | 8 | Realtime dashboard: summary cards, Active Rentals countdowns, live updates | ✅ Done and verified |
 | 9 | Raspberry Pi service: state machine, mock hardware, 16×2 LCD messages, device login + heartbeat | ✅ Done and verified |
 | 10 | ESP32-CAM QR firmware + serial link | ✅ Done and verified on the real board |
-| 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer (Python helper) | ✅ Built and tested in software. ⏳ Bring-up on the Pi (§6). |
-| 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ⬜ Next |
-| 13 | Error handling, audit logs, device monitoring | ⬜ |
-| 14 | Testing, simulator, system validation | ⬜ |
-| 15 | Deployment and final documentation | ⬜ |
+| 11 | Real hardware: RC522, relays/solenoids, coin selector, LCD, buzzer, front-panel buttons (Python helper) | ✅ Built and tested in software. ⏳ Bring-up on the Pi (§6.0g). |
+| 12 | Two-way synchronization: SQLite ⇄ Supabase (outbox push, admin-change pull) | ✅ Built and tested in software. ⏳ Needs `db:push` + a run against the live project (§6). |
+| 13 | Device monitoring, emergency unlock, event and audit logs, transactions, payments, penalties (waive) | ✅ Built and tested in software. ⏳ Needs `db:push` (§6). |
+| 14 | Kiosk simulator (browser), full-system scenario tests, hardware acceptance checklist | ✅ Built. ⏳ Hardware checklist to run on the real kiosk ([testing.md](testing.md) §3). |
+| 14b | Operating hours: rental and late time count only while open; borrowing only while open | ✅ Built and tested in software (§6.0k) |
+| 14c | Power saving: idle sleep (LCD backlight, ESP32-CAM camera, RFID readers off), heat watch | ✅ Built and tested in software. ⏳ Re-flash the ESP32-CAM (1.1.0), test on hardware (§6). |
+| 15 | Deployment and final documentation | ⬜ Next |
 
 **Rule for the team:** a phase is finished only when its verification checklist passes. Don't start the next phase on top of a broken one.
 
@@ -67,9 +69,10 @@ These block later phases. Whoever has the hardware, please fill them in.
 | 3 | 3rd relay for the coin selector | — | ✅ **Not fitted** (idle coins are logged for refund) |
 | 4 | Front-panel buttons | — | ✅ **Blue + red arcade button per locker** (decided 2026-11-25). Blue chooses the locker (GPIO 24/25); red = "door closed", which locks it (GPIO 22/23). No door sensors. |
 | 4b | Solenoid heat when held unlocked | Phase 11 bring-up | ⏳ The lock is held ON until the red button is pressed (up to 60/90 s). Run the heat check in `docs/raspberry-pi.md` §3.1; if the lock gets too hot, lower the removal/return timeouts in Settings. |
-| 5 | Real **RFID UIDs** of the two calculator tags and the real **calculator model** | Phase 11 bring-up | ⏳ Read them with `npm run hwcheck:pi` → `watch` |
+| 5 | Real **RFID UIDs** of the two calculator tags | Phase 12 | ✅ Tag A `FE-AC-31-03` → CALC-001 (Locker 1), tag B `57-99-3B-03` → CALC-002 (Locker 2). ⚠️ **Enter them on the dashboard** (Calculators → Edit) before running the kiosk with sync, or the dashboard's fake seed UIDs replace them on the kiosk. |
+| 6b | **ESP32-CAM firmware 1.1.0** (power saving) | Power saving | ⏳ Re-flash the board (`firmware/esp32-cam/README.md` §2, §6). With 1.0.0 everything works except the camera never sleeps. |
 | 6 | **Real-time clock (DS3231 RTC module)?** With SQLite-first, the Pi's clock sets due times. Without an RTC, the kiosk must wait for internet time sync after every boot (it's unplugged after school hours). | Phase 9 | ⏳ **Deferred by the team, decide later** |
-| — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, keeps counting overnight, **paid before the return locker opens** (2026-11-18). Editable on the Settings page. |
+| — | Pricing, penalties and after-hours rule | — | ✅ Decided: **₱20 for 3 hours** (2026-11-17); overdue **₱10 per started 1.5 hours**, 10-minute grace, **paid before the return locker opens** (2026-11-18). **Operating hours Mon–Fri 9 AM–5 PM; rental and late time count only while open** (2026-11-27, replaces counting overnight). All editable on the Settings page. |
 | — | RFID reader model | — | ✅ **RC522** (13.56 MHz, SPI) |
 | — | School ID QR format | — | ✅ `FULL NAME<TAB>10-digit student number<TAB>COURSE` |
 
@@ -159,7 +162,163 @@ Only **one person** (the "DB owner", normally the project lead) pushes migration
 
 ---
 
-## 6. Phase 11 hand-off: real hardware drivers
+## 6. Power saving (after Phase 14)
+
+### What it does
+When nobody uses the kiosk, it **sleeps** after **2 min** idle on the ready screen (**30 s** when closed):
+- **ESP32-CAM camera off**: power-down pin, no decoding, CPU 240 → 80 MHz. This is the main heat and current saver.
+- **LCD backlight off**: the LCD shows `PRESS ANY BUTTON / TO START`, dim.
+- **RC522 readers off**: RST held LOW on GPIO 4/16, re-initialised on wake. Sensor polling pauses.
+
+**Any button** wakes it. That press only wakes it and never picks a locker. A coin, an officer unlock, or a scan also wakes it. It never sleeps in the middle of a rental or return.
+
+**Heat watch:** a WARNING event when the Pi's CPU reaches 75 °C, CRITICAL at 80 °C (at most every 30 min). **Devices** shows *Power: Asleep/Awake*.
+
+| Where | What |
+|---|---|
+| `firmware/esp32-cam/esp32-cam-qr/esp32-cam-qr.ino` | **v1.1.0**: own decoding loop (library camera setup + quirc), `{"cmd":"sleep"}` / `{"cmd":"wake"}`, `state` and `error` messages. Compiled with core 2.0.17. |
+| `apps/raspberry-pi/hw-bridge/hw_bridge.py` | **v1.3.0**: `backlight` and `rfid_power` commands; readers are re-initialised after power-down |
+| `apps/raspberry-pi/src/hardware/` | `scanner.setActive()`, `display.setBacklight()`, `rfid.setPower()` (real and mock). The scanner re-sends "sleep" if the ESP32 reboots while the kiosk sleeps. |
+| `apps/raspberry-pi/src/kiosk/` | New state `SLEEPING`; sleep after idle, wake on input; the error handler always turns everything back on |
+| `.env` | `POWER_SAVE=true`, `SLEEP_AFTER_SECONDS=120`, `CLOSED_SLEEP_AFTER_SECONDS=30` |
+| `hwcheck:pi` | `backlight on/off`, `rfidpower on/off` |
+| Simulator | Sleeps like the real kiosk (the LCD dims). `SIM_SLEEP_SECONDS=20` for a quick demo. |
+
+### Set it up
+1. **Re-flash the ESP32-CAM** with firmware 1.1.0 (`firmware/esp32-cam/README.md`), and check sleep/wake in the Serial Monitor (§6 there).
+2. Copy the three `POWER_SAVE` lines from `.env.example` into the Pi's `.env` (the defaults work without them).
+
+### Verification checklist
+- [ ] `npm test` passes (369 tests).
+- [ ] Simulator with `SIM_SLEEP_SECONDS=20`: after 20 s the LCD dims to `PRESS ANY BUTTON`. A button wakes it, and a coin wakes it (and is logged).
+- [ ] On the Pi: run [testing.md](testing.md) §3.3 (backlight, RFID power, camera sleep/wake ×5, coin wake, after-hours sleep).
+
+## 6.0k Operating hours and the new late-fee rule (after Phase 14)
+
+### What changed (team decision 2026-11-27)
+- Settings have **operating hours** (default **Mon–Fri 9:00 AM–5:00 PM**), **closed dates** (holidays and suspensions), and **"rental time and late fees count only while open"** (on).
+- **Due time:** the 3 hours count only while open. Borrowed **Tue 3:00 PM** → 2 h Tue + 1 h Wed → **due Wed 10:00 AM**. Borrowed **Fri 4:00 PM** → due **Mon 11:00 AM**. The LCD shows `DUE WED 10:00 AM` when it's another day.
+- **Late fees:** only open minutes after the due time count. Due 4 PM, back next morning at 10 AM = 2 h late (₱20), not 18 h.
+- **Borrowing outside hours is refused** (`KIOSK CLOSED / OPEN WED 9:00AM`); otherwise an evening rental would get a free night. **Returns work any time** the kiosk is on. When idle after hours the LCD shows `RETURNS ONLY / OPEN …`.
+- **Dashboard:** Settings has an *Operating hours* section with a live "borrowed Tuesday 3 PM → due …" example. Active Rentals countdowns count open time only and show "(paused, closed)" at night. "Minutes late" in Supabase uses the same rule (`operating_minutes_between()`).
+- The simulator jumps its clock to the next opening if you start it at night.
+
+| Where | What |
+|---|---|
+| `packages/shared/src/rental/operating-hours.ts` | `operatingCalendar`, `isOpenAt`, `nextOpening`, `addOperatingMinutes`, `operatingMinutesBetween` |
+| `packages/shared` | Settings schema (new fields with defaults, so old saved settings stay valid), `calculatePenalty` → operating minutes, new `penaltyForMinutes`, `rentalCountdown(…, calendar)`, `ErrorCode.KIOSK_CLOSED` |
+| `supabase/migrations/20261127000300_operating_hours.sql` | New `system_settings` columns, `operating_minutes_between()`, `v_rentals` uses it |
+| Kiosk | Due time and late minutes by operating hours; refuses borrowing when closed; closed and next-day LCD screens |
+| Tests | `operating-hours.test.ts` (due times incl. weekend/holiday, lateness, open/closed, countdown). The SQL function is checked against the same cases, plus kiosk scenarios (3 PM rental, after-hours return). |
+
+### Set it up
+```bash
+npm run db:push
+```
+Then check **Settings → Operating hours** and add your school's holidays under closed dates.
+
+### Verification checklist
+- [ ] Settings shows *Opens 09:00, Closes 17:00, Mon–Fri* and the example "borrowed Tuesday 3:00 PM → due … 10:00 AM".
+- [ ] Simulator: borrow, then **+4 hours** past 5 PM → the idle LCD shows `RETURNS ONLY`. Scan another student → `KIOSK CLOSED`. Return Juan → the late time counted only up to 5 PM.
+- [ ] A rental made after 2 PM shows `DUE <weekday> …` on the LCD and a paused countdown on Active Rentals after 5 PM.
+
+## 6.0j Phase 14 hand-off (completed): simulator and system testing
+
+### Built
+- **Kiosk simulator**: `npm run sim:pi`, then open http://localhost:4040.
+  - It's the real kiosk program on simulated hardware: an LCD, the 4 front-panel buttons, a coin slot, ID scans, what the student does inside each locker, a clock you can move forward, and the live log.
+  - `--fresh` starts over; `--sync` also syncs with the backend so the dashboard shows it.
+  - It uses its own `data/simulator.db`.
+- **Full-system scenario tests** (`apps/raspberry-pi/src/full-system.test.ts`): the kiosk + simulated hardware + sync + the real Supabase migrations. Scenarios: an offline day then reconnecting, a late return with penalty, a power cut after payment, officer block, maintenance, a price change, emergency unlock, and a penalty waiver.
+- `src/sync/test-supabase.ts`: a test-only helper (PGlite + a transport that behaves like the sync API).
+- **[docs/testing.md](testing.md)**: every automated suite, things to try in the simulator, and the **hardware acceptance checklist** for the real kiosk.
+- The fake student QR codes now live in `dev-seed.ts` (`DEV_STUDENT_QR`), shared by the console and the simulator.
+
+### Phase 14 verification checklist
+- [ ] `npm test` passes (332 tests).
+- [ ] `npm run sim:pi -- --fresh`, then open http://localhost:4040 and do the 7 "try these" steps in testing.md §2.
+- [ ] Optional: with the web app running, `npm run sim:pi -- --sync`. A simulated borrow appears on the dashboard.
+
+## 6.0i Phase 13 hand-off (completed in software): monitoring and officer tools
+
+### Built
+| Page / part | What officers get |
+|---|---|
+| **Devices** | Online/offline, last heartbeat, kiosk state, CPU temperature, clock difference, software version, sync backlog, last upload/download, sync problems and set-aside items. Per locker: status, expected calculator, what the RFID reader sees, lock/door, last reading. **Emergency unlock** per locker (officers, reason required) and **Sync now**. Recent commands with their results. |
+| **Event Logs** | Every kiosk event (scans, coins, unlocks, RFID checks, sync problems), filterable by severity and type, with errors highlighted and payload details. |
+| **Audit Logs** (officers) | Who did what, when and why (blocks, maintenance, settings, waivers, unlocks), with before/after values. |
+| **Transactions** | All rentals including cancelled/failed ones, with late minutes and penalty owed. |
+| **Payments** | Coin payments for rentals and penalties, totals and overpaid coins. |
+| **Penalties** | Late fees with **Waive** (officers, reason required). The waiver reaches the kiosk on its next sync and unblocks the student. |
+
+**How emergency unlock works**
+1. The dashboard writes a `device_commands` row.
+2. The kiosk receives it in its next sync reply (≤ ~10 s).
+3. **Only if no student is using the kiosk**, it unlocks that locker for **10 s** (LCD `OFFICER UNLOCK`, WARNING event `LOCKER_UNLOCKED`), then locks again.
+4. The result (DONE/FAILED and the reason) comes back on the next sync.
+5. A command nobody picked up **expires after 2 minutes**, so a kiosk coming back online later never opens a locker by surprise.
+
+| Where | What |
+|---|---|
+| `supabase/migrations/20261127000200_monitoring.sql` | `device_commands` (RLS: admins read, server writes), `v_devices` (device + sync columns + connection status), Realtime for commands and events |
+| `apps/web/src/app/api/device/sync/route.ts` | The push request carries `commandResults` and the reply carries `commands` (expired ones are marked `EXPIRED`) |
+| `apps/raspberry-pi/src/sync/sync-service.ts` | Polls for commands every push cycle, runs them (`REFRESH` = pull now), reports results immediately, keeps them if the network drops |
+| `apps/raspberry-pi/src/kiosk/` | New state `OFFICER_UNLOCK`; `handleOfficerUnlock()` |
+| Dashboard | Pages above; `FilterBar` got an optional second filter |
+
+### Set it up
+```bash
+npm run db:push
+```
+
+### Phase 13 verification checklist
+- [ ] **Devices** shows the kiosk ONLINE with a recent heartbeat while `start:pi` runs, and OFFLINE about 90 s after you stop it.
+- [ ] **Emergency unlock** on Locker 1 (with a reason): within ~10 s the kiosk LCD shows `OFFICER UNLOCK` (mock mode prints it), it locks again after 10 s, and the command shows **Done**. The unlock also appears in **Audit Logs** and **Event Logs**.
+- [ ] Start a borrow (`juan`), then try the emergency unlock. The command shows **Failed: The kiosk is busy…**
+- [ ] Stop the kiosk and request an unlock. After 2 minutes it shows **Expired**. Starting the kiosk later does **not** unlock anything.
+- [ ] Make a late return without paying (mock: `juan`, `blue 1`, `coin 20`, `take 1`, `red 1`, `wait 240`, `juan`, then let the penalty time out). **Penalties** shows it UNPAID. **Waive** it, and within a minute `juan` can borrow again.
+- [ ] **Transactions**, **Payments** and **Event Logs** fill up as you use the mock kiosk, and their filters work.
+
+## 6.0h Phase 12 hand-off (completed in software): two-way sync (kiosk SQLite ⇄ Supabase)
+
+### What it does
+- **Push** (every 10 s): the kiosk's outbox goes to Supabase in order. That covers rentals, returns, payments, coins, penalties, events, locker and calculator statuses, and new students. The dashboard now shows real kiosk activity.
+- **Pull** (every 60 s): officer changes reach the kiosk. That covers Settings, locker and calculator setup (**RFID UIDs**), maintenance, student blocks and penalty waivers. This replaces `npm run seed:pi` for real data.
+- **Heartbeat** (every 30 s) also carries each locker's live sensor state and the sync health.
+- Offline-first: with no internet the kiosk keeps working, and the outbox waits.
+- Who wins when both sides change something: [architecture.md §3.9](architecture.md).
+
+### Built
+| Where | What |
+|---|---|
+| `supabase/migrations/20261127000100_kiosk_sync.sql` | `apply_kiosk_sync(device, items)`: one sub-transaction per item, stops at the first refused item. Merge rules (maintenance, penalty waivers, resolved rentals). New `device_registry.last_sync_at / last_pull_at / last_sync_error`. |
+| `apps/web/src/app/api/device/sync/route.ts` | `POST` push, `GET` pull (paged by `updated_at` cursors). Device-authenticated like the heartbeat. |
+| `packages/shared/src/sync.ts` | Zod contract for push, pull and heartbeat extras (validated on both sides). |
+| `apps/raspberry-pi/src/sync/sync-service.ts` | Push and pull loops, back-off (10 s … 10 min), sets an item aside after 20 attempts (CRITICAL `SYNC_FAILED` event), prunes synced rows after 7 days. |
+| `apps/raspberry-pi/src/db/` | SQLite **v5**: `penalties.waived_centavos`, outbox `failed_at`. `KioskStore.applyPull()` applies officer data without echoing it back. Calculator status changes now go into the outbox. |
+| Tests | `supabase-sync.test.ts` runs **real kiosk flows into the real Supabase migrations** (PGlite). `sync-service.test.ts` covers back-off, offline, paging, swapped RFID UIDs, maintenance, blocks and waivers. |
+
+### Set it up (lead, once)
+1. Merge the PR, then push the migration:
+   ```bash
+   npm run db:push
+   ```
+2. Regenerate the types (optional; the PR already includes the new ones):
+   ```bash
+   npm run db:types
+   ```
+3. **On the dashboard, set the real tag UIDs:** CALC-001 → `FE-AC-31-03`, CALC-002 → `57-99-3B-03`. After that, the dashboard is where UIDs are changed. `seed:pi` is for laptops only.
+4. On the Pi, `BACKEND_URL` must point at the web app (a laptop's `http://<ip>:3000` now, Vercel in Phase 15), and `DEVICE_SECRET` must match the device's hash in Supabase.
+
+### Phase 12 verification checklist
+- [ ] `npm test` passes (318 tests). The sync tests need no internet.
+- [ ] With the web app running and the kiosk started, after ~10 s the kiosk log shows no `Sync:` warnings. **Devices** later shows the last sync time (Phase 13 page).
+- [ ] Do a mock borrow (`start:pi`: `juan`, `blue 1`, `coin 20`, `take 1`, `red 1`). Within ~10 s **Active Rentals** on the dashboard shows Juan's rental.
+- [ ] Put Locker 2 in maintenance on the dashboard. Within ~60 s the kiosk's LCD shows `2:N/A`.
+- [ ] Block a student on the dashboard. Within ~60 s that student's scan shows `ACCOUNT BLOCKED`.
+- [ ] Stop the web app, do a borrow, then restart the web app. The rental appears once the kiosk reconnects (nothing lost, nothing doubled).
+
+## 6.0g Phase 11 hand-off (completed in software): real hardware drivers
 
 ### Phase 11d update (2026-11-26): final wiring, RC522 RST on GPIO
 The team confirmed the final wiring. It matches the code except for these changes:

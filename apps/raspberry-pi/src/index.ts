@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { APP_VERSION, HEARTBEAT_INTERVAL_SECONDS, MAX_CLOCK_DRIFT_SECONDS } from '@calc-rental/shared';
+import { APP_VERSION, EventSeverity, EventType, HEARTBEAT_INTERVAL_SECONDS, MAX_CLOCK_DRIFT_SECONDS } from '@calc-rental/shared';
 import { BackendClient } from './backend/client';
 import { bridgeArgs, config } from './config';
 import { KioskStore } from './db/kiosk-store';
@@ -23,6 +23,7 @@ import { logger } from './logger';
 import { PaymentService } from './payment/payment-service';
 import { RentalService } from './rental/rental-service';
 import { ReturnService } from './rental/return-service';
+import { SyncService } from './sync/sync-service';
 
 /**
  * Raspberry Pi kiosk service.
@@ -30,7 +31,8 @@ import { ReturnService } from './rental/return-service';
  *   1. validates configuration and opens the local SQLite database (main DB),
  *   2. builds the hardware: HARDWARE_MODE=mock (laptop console) or real (Pi, via the Python bridge),
  *   3. runs the kiosk state machine (tick every 250 ms),
- *   4. sends a heartbeat every 30 s (device-authenticated; sync arrives in Phase 12),
+ *   4. syncs with Supabase (Phase 12: outbox push every 10 s, officer data pull every 60 s)
+ *      and sends a device-authenticated heartbeat every 30 s,
  *   5. shuts down cleanly on Ctrl+C / systemd stop.
  */
 
@@ -106,6 +108,9 @@ async function main(): Promise<void> {
   const returns = new ReturnService(store, payments, { now });
   const kiosk = new KioskController(store, hardware, { rentals, payments, returns }, {
     now,
+    // Power saving: idle → LCD backlight, ESP32-CAM camera and RFID readers off; any button wakes it.
+    sleepAfterMs: config.POWER_SAVE ? config.SLEEP_AFTER_SECONDS * 1000 : 0,
+    closedSleepAfterMs: config.CLOSED_SLEEP_AFTER_SECONDS * 1000,
     log: (level, message, data) => logger[level]({ event: 'KIOSK', ...data }, message),
   });
   await kiosk.start();
@@ -123,15 +128,45 @@ async function main(): Promise<void> {
     deviceId: config.DEVICE_ID,
     deviceSecret: config.DEVICE_SECRET,
   });
+  const sync = new SyncService(store, backend, {
+    now,
+    log: (level, message, data) => logger[level]({ event: 'SYNC', ...data }, message),
+  });
+  // Phase 13: emergency unlock requested by an officer on the Devices page.
+  sync.onCommand(async (cmd) => {
+    const lockerId = typeof cmd.payload.lockerId === 'string' ? cmd.payload.lockerId : '';
+    const requestedBy = typeof cmd.payload.requestedBy === 'string' ? cmd.payload.requestedBy : undefined;
+    const result = await kiosk.handleOfficerUnlock(lockerId, { commandId: cmd.id, requestedBy });
+    return { status: result.ok ? 'DONE' : 'FAILED', message: result.message };
+  });
+  sync.start();
+
   let backendOnline: boolean | null = null;
+  let lastHeatWarning = 0;
   const heartbeat = async () => {
+    const cpuTempC = readCpuTemperature();
+    // Overheating watch: one event per 30 min while hot (the Pi throttles itself at 80 °C).
+    if (cpuTempC !== null && cpuTempC >= 75 && Date.now() - lastHeatWarning > 30 * 60_000) {
+      lastHeatWarning = Date.now();
+      const critical = cpuTempC >= 80;
+      store.recordEvent({
+        type: EventType.SYSTEM_ERROR,
+        severity: critical ? EventSeverity.CRITICAL : EventSeverity.WARNING,
+        message: `Raspberry Pi CPU is ${cpuTempC.toFixed(1)} °C${critical ? ' (throttling): check ventilation now' : ': check ventilation'}`,
+        payload: { cpuTempC },
+        occurredAt: now().toISOString(),
+      });
+      logger.warn({ event: 'SYSTEM_ERROR', cpuTempC }, 'Raspberry Pi is running hot');
+    }
     const result = await backend.heartbeat({
       softwareVersion: APP_VERSION,
       kioskState: kiosk.state,
       syncQueueCount: store.pendingSyncCount(),
       localDbOk: db.pragma('quick_check', { simple: true }) === 'ok',
-      cpuTempC: readCpuTemperature(),
+      cpuTempC,
       sentAt: now().toISOString(),
+      lockers: store.lockerSensorReports(),
+      sync: sync.status(),
     });
     if (result.ok !== backendOnline) {
       if (result.ok) logger.info({ event: 'DEVICE_ONLINE', latencyMs: result.latencyMs }, 'Backend reachable, heartbeat accepted');
@@ -152,6 +187,7 @@ async function main(): Promise<void> {
     logger.info({ event: 'SERVICE_STOPPING', signal }, 'Shutting down');
     clearInterval(ticker);
     clearInterval(connectivity);
+    sync.stop();
     console_?.close();
     bridge?.stop();
     serialScanner?.stop();

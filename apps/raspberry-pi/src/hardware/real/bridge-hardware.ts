@@ -41,6 +41,10 @@ export class BridgeRFIDReader implements RFIDReader {
       return { uid: null, readerOk: false };
     }
   }
+  /** Readers off = RST held LOW (hard power-down); on = reset and re-initialised. */
+  async setPower(on: boolean) {
+    await this.bridge.request('rfid_power', { on }).catch(() => {}); // power saving must never stop the kiosk
+  }
 }
 
 export class BridgeLockerController implements LockerController {
@@ -80,6 +84,9 @@ export class BridgeDisplay implements DisplayController {
     this.last = key;
     this.mirror?.(screen);
     await this.bridge.request('lcd', { lines: screen });
+  }
+  async setBacklight(on: boolean) {
+    await this.bridge.request('backlight', { on }).catch(() => {});
   }
 }
 

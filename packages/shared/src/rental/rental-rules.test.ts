@@ -315,6 +315,7 @@ describe('rentalCountdown', () => {
     ['2026-10-20T05:32:16.000Z', true, '00:32:16'],
     ['2026-10-21T07:05:00.000Z', true, '26:05:00'],
   ])('at %s → overdue=%s %s', (now, overdue, text) => {
-    expect(rentalCountdown(due, new Date(now))).toEqual({ overdue, text });
+    // No calendar = every minute counts (operating-hours countdowns: operating-hours.test.ts).
+    expect(rentalCountdown(due, new Date(now))).toEqual({ overdue, text, paused: false });
   });
 });

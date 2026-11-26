@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DoorState, RentalStatus } from '@calc-rental/shared';
-import { DEV_RFID, DEV_SETTINGS, seedDevData } from '../db/dev-seed';
+import { DEV_IDS, DEV_RFID, DEV_SETTINGS, seedDevData } from '../db/dev-seed';
 import { KioskStore } from '../db/kiosk-store';
 import { openLocalDatabase } from '../db/sqlite';
 import { createMockHardware, type MockHardware } from '../hardware/mock';
@@ -13,6 +13,7 @@ import { KioskState, canMove } from './kiosk-states';
 // Fake identities only.
 const JUAN = 'JUAN DELA CRUZ\t2022100001\tBSCpE';
 const ANA_BLOCKED = 'ANA GARCIA\t2022100004\tBSCpE';
+const DEV_STUDENT_QR_MARIA = 'MARIA SANTOS\t2023100002\tBSCE';
 const SECOND = 1000;
 const HOUR = 3600 * SECOND;
 
@@ -32,7 +33,7 @@ const coin = (pesos: number, id = `c${pesos}-${Math.random()}`) =>
   kiosk.handleCoin({ eventId: id, pulseCount: pesos, occurredAt: clock.toISOString() });
 const rentalStatus = () => (store.db.prepare(`SELECT status FROM rentals`).get() as { status: string } | undefined)?.status;
 
-async function boot(options: { clockSynced?: boolean } = {}) {
+async function boot(options: { clockSynced?: boolean; sleepAfterMs?: number } = {}) {
   store = new KioskStore(openLocalDatabase(':memory:'));
   clock = new Date('2026-10-20T02:00:00.000Z'); // 10:00 AM Manila
   seedDevData(store, { sensorsReady: false, nowIso: clock.toISOString() });
@@ -44,7 +45,7 @@ async function boot(options: { clockSynced?: boolean } = {}) {
   const rentals = new RentalService(store, { deviceCode: 'DEVICE-CALC-KIOSK-001', now });
   const payments = new PaymentService(store, rentals, { now });
   const returns = new ReturnService(store, payments, { now });
-  kiosk = new KioskController(store, hw, { rentals, payments, returns }, { now, messageMs: 3 * SECOND });
+  kiosk = new KioskController(store, hw, { rentals, payments, returns }, { now, messageMs: 3 * SECOND, sleepAfterMs: options.sleepAfterMs });
   await kiosk.start(); // no tick: the first scan must already see the calculators
 }
 
@@ -387,6 +388,148 @@ describe('restart recovery', () => {
     await kiosk.handleScan(JUAN);
     await restart();
     expect(store.getRental(rentalId)!.status).toBe(RentalStatus.ACTIVE);
+  });
+});
+
+describe('operating hours (Mon–Fri 9 AM–5 PM, clock pauses while closed)', () => {
+  it('a rental at 3 PM is due the next morning, shown with the weekday', async () => {
+    clock = new Date('2026-10-20T07:00:00.000Z'); // Tue 3:00 PM Manila
+    await kiosk.handleScan(JUAN);
+    await blue(1);
+    await coin(20);
+    hw.rfid.place(1, null);
+    await advance(SECOND);
+    await red(1);
+    expect(lcd()).toEqual(['RENTAL SUCCESS', 'DUE WED 10:00 AM']);
+    expect(store.db.prepare(`SELECT due_at FROM rentals`).get()).toEqual({ due_at: '2026-10-21T02:00:01.000Z' });
+  });
+
+  it('after hours: idle screen says returns only, borrowing is refused, returns still work', async () => {
+    const rentalId = await borrow(); // Tue 10:00 AM, due 1:00 PM
+    clock = new Date('2026-10-20T11:00:00.000Z'); // Tue 7:00 PM: closed
+    await advance(SECOND);
+    expect(lcd()).toEqual(['RETURNS ONLY', 'OPEN WED 9:00AM']);
+
+    await kiosk.handleScan(DEV_STUDENT_QR_MARIA);
+    expect(lcd()).toEqual(['KIOSK CLOSED', 'OPEN WED 9:00AM']);
+    await advance(3 * SECOND);
+
+    // Juan returns at 7 PM: due 1 PM, the kiosk closed at 5 PM → 4 h late, not 6 h.
+    await kiosk.handleScan(JUAN);
+    expect(lcd()).toEqual(['LATE 3H59M', 'PAY PENALTY P30']);
+    await coin(20);
+    await coin(10);
+    hw.rfid.place(1, DEV_RFID.calc1);
+    await red(1);
+    expect(kiosk.state).toBe(KioskState.RETURN_COMPLETE);
+    expect(store.getRental(rentalId)!.overdue_minutes).toBe(239);
+  });
+});
+
+describe('power saving', () => {
+  const MIN = 60 * SECOND;
+  beforeEach(() => boot({ sleepAfterMs: 2 * MIN }));
+
+  it('sleeps after 2 min idle: backlight, camera and RFID readers off', async () => {
+    await advance(MIN);
+    expect(kiosk.state).toBe(KioskState.SYSTEM_READY);
+    await advance(MIN + SECOND);
+    expect(kiosk.state).toBe(KioskState.SLEEPING);
+    expect(lcd()).toEqual(['PRESS ANY BUTTON', 'TO START']);
+    expect({ backlight: hw.display.backlight, camera: hw.scanner.active, rfid: hw.rfid.powered }).toEqual({
+      backlight: false,
+      camera: false,
+      rfid: false,
+    });
+  });
+
+  it('does not read the (powered-down) RFID readers while asleep', async () => {
+    await advance(2 * MIN + SECOND);
+    let reads = 0;
+    const read = hw.rfid.read.bind(hw.rfid);
+    hw.rfid.read = async (ch) => {
+      reads++;
+      return read(ch);
+    };
+    await advance(10 * SECOND);
+    expect(reads).toBe(0);
+  });
+
+  it('a button press only wakes it (no locker is chosen), then everything is back on', async () => {
+    await advance(2 * MIN + SECOND);
+    await kiosk.handleButton('select', 1);
+    expect(kiosk.state).toBe(KioskState.SYSTEM_READY);
+    expect(lcd()).toEqual(['SCAN STUDENT ID', '1:READY 2:READY']);
+    expect({ backlight: hw.display.backlight, camera: hw.scanner.active, rfid: hw.rfid.powered }).toEqual({
+      backlight: true,
+      camera: true,
+      rfid: true,
+    });
+    await kiosk.handleScan(JUAN); // then a normal borrow works
+    expect(kiosk.state).toBe(KioskState.SELECTING_LOCKER);
+  });
+
+  it('a coin wakes it and is still recorded for refund', async () => {
+    await advance(2 * MIN + SECOND);
+    await coin(5, 'idle-coin');
+    expect(kiosk.state).toBe(KioskState.SYSTEM_READY);
+    expect(store.db.prepare(`SELECT payment_id FROM coin_events WHERE id = 'idle-coin'`).get()).toEqual({ payment_id: null });
+  });
+
+  it('never sleeps in the middle of a rental, and the idle time restarts after it', async () => {
+    await kiosk.handleScan(JUAN);
+    await blue(1);
+    await advance(3 * MIN); // waiting for coins
+    expect(kiosk.state).not.toBe(KioskState.SLEEPING);
+    await advance(MIN); // payment times out → message → ready
+    await advance(4 * SECOND);
+    expect(kiosk.state).toBe(KioskState.SYSTEM_READY);
+    await advance(MIN);
+    expect(kiosk.state).toBe(KioskState.SYSTEM_READY);
+  });
+
+  it('sleeps sooner (30 s) after closing time', async () => {
+    clock = new Date('2026-10-20T11:00:00.000Z'); // Tue 7:00 PM: closed
+    await advance(SECOND);
+    await advance(31 * SECOND);
+    expect(kiosk.state).toBe(KioskState.SLEEPING);
+    expect(lcd()).toEqual(['PRESS ANY BUTTON', 'TO RETURN']);
+  });
+
+  it('an officer unlock wakes it first', async () => {
+    await advance(2 * MIN + SECOND);
+    expect(await kiosk.handleOfficerUnlock(DEV_IDS.locker1, { commandId: 'c' })).toMatchObject({ ok: true });
+    expect(hw.display.backlight).toBe(true);
+  });
+});
+
+describe('officer emergency unlock (Phase 13)', () => {
+  it('unlocks the locker for 10 s while idle, logs a WARNING event, then locks and returns to ready', async () => {
+    const result = await kiosk.handleOfficerUnlock(DEV_IDS.locker2, { commandId: 'cmd-1', requestedBy: 'officer@example.test' });
+    expect(result).toEqual({ ok: true, message: 'Locker 2 unlocked for 10 s.' });
+    expect(kiosk.state).toBe(KioskState.OFFICER_UNLOCK);
+    expect([...hw.lockers.open]).toEqual([2]);
+    expect(lcd()).toEqual(['OFFICER UNLOCK', 'LOCKER 2 OPEN']);
+    expect(store.db.prepare(`SELECT severity FROM device_events WHERE event_type = 'LOCKER_UNLOCKED'`).get()).toEqual({ severity: 'WARNING' });
+
+    await kiosk.handleScan(JUAN); // students can't start anything meanwhile
+    expect(kiosk.state).toBe(KioskState.OFFICER_UNLOCK);
+
+    await advance(11 * SECOND);
+    expect(hw.lockers.open.size).toBe(0);
+    expect(kiosk.state).toBe(KioskState.SYSTEM_READY);
+  });
+
+  it('refuses while a student is using the kiosk', async () => {
+    await kiosk.handleScan(JUAN);
+    const result = await kiosk.handleOfficerUnlock(DEV_IDS.locker1, { commandId: 'cmd-2' });
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/busy/);
+    expect(hw.lockers.open.size).toBe(0);
+  });
+
+  it('refuses an unknown locker', async () => {
+    expect(await kiosk.handleOfficerUnlock('00000000-0000-4000-8000-000000000999', { commandId: 'cmd-3' })).toMatchObject({ ok: false });
   });
 });
 

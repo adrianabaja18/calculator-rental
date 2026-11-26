@@ -11,6 +11,8 @@
  *   rfid              read every reader (and door switch, if DOOR_PINS is set) once
  *   watch             keep reading; prints whenever a tag appears/leaves or a door opens/closes (Enter stops)
  *   lock <locker>     switch that relay off now
+ *   backlight on|off  LCD backlight (power saving)
+ *   rfidpower on|off  RC522 readers powered down / woken up (power saving, needs RFID_RST_PINS)
  *   quit
  * Coins and front-panel button presses are printed automatically.
  */
@@ -43,7 +45,7 @@ if (!ready) {
 console.log(`\nHardware bridge ${ready.version} (${ready.mode}) — devices found:`, ready.devices);
 console.log(`Pins: relays ${config.RELAY_PINS} (${config.RELAY_ACTIVE_LOW ? 'active-LOW' : 'active-HIGH'}), coin ${config.COIN_PIN}, buzzer ${config.BUZZER_PIN}, RFID SPI ${config.RFID_SPI} (RST ${config.RFID_RST_PINS || '3.3V'}), LCD ${config.LCD_I2C_ADDRESS}, doors ${config.DOOR_PINS || 'none'}`);
 console.log(`Buttons: blue ${config.SELECT_BUTTON_PINS || 'none'}, red ${config.CLOSE_BUTTON_PINS || 'none'} (press them any time)`);
-console.log('Commands: lcd [text] | beep [ok|error|attention] | unlock <1..n> | lock <1..n> | rfid | watch | quit\n');
+console.log('Commands: lcd [text] | beep [ok|error|attention] | unlock <1..n> | lock <1..n> | backlight on|off | rfidpower on|off | rfid | watch | quit\n');
 
 let watching: NodeJS.Timeout | null = null;
 const last = new Map<number, string | null>();
@@ -92,6 +94,16 @@ rl.on('line', async (line) => {
         await bridge.request('unlock', { channel: ch, ms: config.LOCK_PULSE_MS });
         return console.log(`  relay ${ch} ON for ${config.LOCK_PULSE_MS} ms (you should hear the relay click twice and the solenoid pull in)`);
       }
+      case 'backlight':
+      case 'rfidpower': {
+        const on = rest[0] !== 'off';
+        await bridge.request(cmd === 'backlight' ? 'backlight' : 'rfid_power', { on });
+        return console.log(
+          cmd === 'backlight'
+            ? `  LCD backlight ${on ? 'ON' : 'OFF'} (the text stays, dim)`
+            : `  RFID readers ${on ? 'ON again (try: rfid)' : 'OFF: RST held LOW; "rfid" now says NOT RESPONDING, that is expected'}`,
+        );
+      }
       case 'lock': {
         const ch = Number(rest[0]);
         if (!(ch >= 1 && ch <= relays)) return console.log(`  usage: lock <1..${relays}>`);
@@ -114,7 +126,7 @@ rl.on('line', async (line) => {
       case '':
         return;
       default:
-        return console.log('  commands: lcd [text] | beep [ok|error|attention] | unlock <n> | lock <n> | rfid | watch | quit');
+        return console.log('  commands: lcd [text] | beep [ok|error|attention] | unlock <n> | lock <n> | backlight on|off | rfidpower on|off | rfid | watch | quit');
     }
   } catch (error) {
     console.log(`  ✘ ${(error as Error).message}`);

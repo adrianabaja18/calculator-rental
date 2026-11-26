@@ -21,7 +21,10 @@ it('upgrading an existing kiosk database keeps changes still waiting to sync', (
   expect(db.prepare('SELECT entity, entity_id, payload FROM sync_queue').all()).toEqual([
     { entity: 'rental', entity_id: 'r1', payload: '{"x":1}' },
   ]);
-  // ...and the new 'penalty' entity is now allowed.
+  // ...and the newer entities are now allowed.
   db.prepare(`INSERT INTO sync_queue (entity, entity_id, payload) VALUES ('penalty', 'p1', '{}')`).run();
+  db.prepare(`INSERT INTO sync_queue (entity, entity_id, payload) VALUES ('calculator_state', 'c1', '{}')`).run();
+  // The next outbox number continues after the kept one (never reused).
+  expect((db.prepare(`SELECT MAX(seq) AS s FROM sync_queue`).get() as { s: number }).s).toBe(3);
   db.close();
 });

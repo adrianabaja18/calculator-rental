@@ -22,6 +22,12 @@ export interface SystemSettingsRow {
   return_timeout_seconds: number;
   allow_offline_returns: boolean;
   allow_offline_rentals: boolean;
+  /** Operating hours (2026-11-27); Postgres `time` arrives as "09:00:00". */
+  operating_hours_start?: string;
+  operating_hours_end?: string;
+  operating_days?: number[];
+  closed_dates?: string[];
+  pause_clock_outside_hours?: boolean;
 }
 
 /**
@@ -49,5 +55,10 @@ export function systemSettingsFromRow(row: SystemSettingsRow): SystemSettings {
     returnTimeoutSeconds: row.return_timeout_seconds,
     allowOfflineReturns: row.allow_offline_returns,
     allowOfflineRentals: row.allow_offline_rentals,
+    operatingHoursStart: row.operating_hours_start?.slice(0, 5),
+    operatingHoursEnd: row.operating_hours_end?.slice(0, 5),
+    operatingDays: row.operating_days,
+    closedDates: row.closed_dates,
+    pauseClockOutsideHours: row.pause_clock_outside_hours,
   });
 }

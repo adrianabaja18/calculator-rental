@@ -22,6 +22,7 @@
     "seed:pi": "npm run seed:dev --workspace @calc-rental/raspberry-pi --",
     "scanner:pi": "npm run scanner:test --workspace @calc-rental/raspberry-pi --",
     "hwcheck:pi": "npm run hw:check --workspace @calc-rental/raspberry-pi --",
+    "sim:pi": "npm run sim --workspace @calc-rental/raspberry-pi --",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc --noEmit -p supabase/tests",
     "test": "vitest run",
     "test:watch": "vitest",

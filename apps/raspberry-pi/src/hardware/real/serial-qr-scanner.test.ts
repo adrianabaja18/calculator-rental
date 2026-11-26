@@ -61,6 +61,28 @@ describe('SerialQRScanner (mock serial port)', () => {
     expect(setCalls).toEqual([{ dtr: false, rts: false }]);
   });
 
+  it('power saving: sends sleep/wake to the ESP32, and sleep again if it reboots while the kiosk sleeps', async () => {
+    const { esp32, port } = connect();
+    await wait();
+    const written = () => (port().port as unknown as { recording: Buffer }).recording.toString();
+
+    await scanner!.setActive(false);
+    await wait();
+    expect(written()).toBe('{"cmd":"sleep"}\n');
+
+    esp32('{"type":"state","state":"sleeping"}\n');
+    await wait();
+    expect(scanner!.status.cameraState).toBe('sleeping');
+
+    esp32('{"type":"hello","fw":"1.1.0","state":"awake"}\n'); // ESP32 rebooted (starts awake)
+    await wait();
+    expect(written()).toBe('{"cmd":"sleep"}\n{"cmd":"sleep"}\n');
+
+    await scanner!.setActive(true);
+    await wait();
+    expect(written().endsWith('{"cmd":"wake"}\n')).toBe(true);
+  });
+
   it('reconnects after the cable is unplugged', async () => {
     const { scans, esp32, port } = connect();
     await wait();

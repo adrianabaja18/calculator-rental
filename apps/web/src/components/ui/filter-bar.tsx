@@ -8,35 +8,60 @@ export function FilterBar({
   status,
   statusOptions,
   placeholder,
+  statusAllLabel = 'All statuses',
+  extra,
 }: {
-  q: string;
+  /** Omit to hide the search box. */
+  q?: string;
   status: string;
   statusOptions: { value: string; label: string }[];
-  placeholder: string;
+  placeholder?: string;
+  statusAllLabel?: string;
+  /** Optional second filter, e.g. event type (?type=…). */
+  extra?: { name: string; label: string; allLabel: string; value: string; options: { value: string; label: string }[] };
 }) {
   const control =
     'rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/30';
   return (
     <form method="get" role="search" className="mb-4 flex flex-wrap items-center gap-2">
-      <label className="sr-only" htmlFor="q">
-        Search
-      </label>
-      <input id="q" name="q" type="search" defaultValue={q} placeholder={placeholder} className={`${control} w-full sm:w-72`} />
+      {q !== undefined && (
+        <>
+          <label className="sr-only" htmlFor="q">
+            Search
+          </label>
+          <input id="q" name="q" type="search" defaultValue={q} placeholder={placeholder} className={`${control} w-full sm:w-72`} />
+        </>
+      )}
       <label className="sr-only" htmlFor="status">
         Status
       </label>
       <select id="status" name="status" defaultValue={status} className={control}>
-        <option value="">All statuses</option>
+        <option value="">{statusAllLabel}</option>
         {statusOptions.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
           </option>
         ))}
       </select>
+      {extra && (
+        <>
+          <label className="sr-only" htmlFor={extra.name}>
+            {extra.label}
+          </label>
+          <select id={extra.name} name={extra.name} defaultValue={extra.value} className={control}>
+            <option value="">{extra.allLabel}</option>
+            {extra.options.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
       <button type="submit" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
         Apply
       </button>
-      {(q || status) && (
+      {(q || status || extra?.value) && (
         <a href="?" className="text-sm font-medium text-blue-700 hover:underline">
           Clear
         </a>

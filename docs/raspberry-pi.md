@@ -164,6 +164,29 @@ The 12 V ground and the Pi ground meet only where needed. The PC817 keeps the co
 ```
 Only one locker is ever unlocked at a time (Rule 4), so the 12 V adapter powers one solenoid plus the coin selector.
 
+### 4.1 Power saving and heat (added 2026-11-27)
+When nobody uses the kiosk, it **sleeps**. Any **button press** wakes it. That press only wakes it, so nobody picks a locker by accident.
+
+| Part | Asleep | How |
+|---|---|---|
+| **ESP32-CAM camera** | **Off** (OV2640 power-down pin, CPU 240 → 80 MHz) | `{"cmd":"sleep"}` over USB serial (firmware **1.1.0**, re-flash needed) |
+| **LCD backlight** | **Off** (text stays, dim: `PRESS ANY BUTTON / TO START`) | PCF8574 backlight bit (`backlight` bridge command) |
+| **RC522 readers ×2** | **Off** (RST held LOW = hard power-down, microamps) | GPIO 4 / 16 (`RFID_RST_PINS`); readers are re-initialised on wake |
+| Solenoids / relays | Already off except during an unlock | — |
+| Coin selector | Stays on (no 3rd relay) | A coin also wakes the kiosk (it's logged for refund, as before) |
+| Sensor polling | Paused (readers are off) | Resumes, with a fresh reading, on wake |
+
+- **When:** after `SLEEP_AFTER_SECONDS` (default **120 s**) idle on the ready screen, or `CLOSED_SLEEP_AFTER_SECONDS` (default **30 s**) outside operating hours. Never in the middle of a rental or return.
+- **Wakes on:** any blue or red button, a coin, an officer's emergency unlock, or a QR scan if the camera is still on.
+- **Turn it off:** `POWER_SAVE=false` in `.env`. The dashboard's **Devices** page shows *Power: Asleep/Awake*.
+- **Heat watch:** the kiosk logs a WARNING event when the Pi's CPU reaches **75 °C** and a CRITICAL one at **80 °C** (where the Pi slows itself down), at most once per 30 min. They show on **Event Logs**.
+
+**Raspberry Pi itself (optional, saves a little more heat):**
+- Fit the heatsinks, and a small 5 V fan if the enclosure is closed. Leave vent holes at the top and bottom.
+- Turn off Bluetooth (not used): add `dtoverlay=disable-bt` to `/boot/firmware/config.txt`, then reboot.
+- Run it without a monitor attached (HDMI unplugged).
+- Keep the Wi-Fi on if the kiosk uses Wi-Fi for internet. Turn it off (`dtoverlay=disable-wifi`) only if the kiosk uses Ethernet.
+
 ## 5. Raspberry Pi setup (once)
 On Raspberry Pi OS (64-bit, Bookworm or newer):
 ```bash

@@ -23,7 +23,12 @@ import type {
  */
 
 export class MockQRScanner implements QRScanner {
+  /** false while the kiosk sleeps (camera off). */
+  active = true;
   private handler: ((raw: string) => void) | null = null;
+  async setActive(active: boolean) {
+    this.active = active;
+  }
   onScan(handler: (raw: string) => void) {
     this.handler = handler;
   }
@@ -49,7 +54,12 @@ export class MockCoinAcceptor implements CoinAcceptor {
 }
 
 export class MockRFIDReader implements RFIDReader {
+  /** false while the kiosk sleeps (readers held in reset). */
+  powered = true;
   private readonly tags = new Map<number, string | null>();
+  async setPower(on: boolean) {
+    this.powered = on;
+  }
   private readonly broken = new Set<number>();
   async read(channel: number): Promise<RfidReading> {
     return { uid: this.tags.get(channel) ?? null, readerOk: !this.broken.has(channel) };
@@ -99,6 +109,10 @@ export class MockButtons implements ButtonPanel {
 
 export class MockDisplay implements DisplayController {
   current: LcdScreen = ['', ''];
+  backlight = true;
+  async setBacklight(on: boolean) {
+    this.backlight = on;
+  }
   readonly history: LcdScreen[] = [];
   constructor(private readonly onShow?: (screen: LcdScreen) => void) {}
   async show(screen: LcdScreen) {

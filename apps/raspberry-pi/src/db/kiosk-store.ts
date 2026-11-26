@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
+  CalculatorStatus as CalcStatus,
+  LockerStatus as LockerStatusValue,
   OPEN_RENTAL_STATUSES,
   SystemSettingsSchema,
   type CalculatorCondition,
@@ -13,6 +15,11 @@ import {
   type RentalStatus,
   type RfidState,
   type StudentStatus,
+  type PullCalculator,
+  type PullLocker,
+  type PullPenalty,
+  type PullStudent,
+  type SyncEntity,
   type SystemSettings,
 } from '@calc-rental/shared';
 import type { LocalDatabase } from './sqlite';
@@ -95,14 +102,43 @@ export interface PenaltyRecord {
   overdue_minutes: number;
   calculated_centavos: number;
   amount_paid_centavos: number;
-  /** Remaining balance (calculated − paid). */
+  /** Waived by an officer on the dashboard (pulled by sync). */
+  waived_centavos: number;
+  /** Remaining balance (calculated − waived − paid). */
   amount_due_centavos: number;
   status: 'UNPAID' | 'PARTIAL' | 'PAID' | 'WAIVED';
   paid_at: string | null;
   updated_at: string;
 }
 
-export type SyncEntity = 'student' | 'rental' | 'device_event' | 'coin_event' | 'payment' | 'locker_state' | 'penalty';
+export interface OutboxItem {
+  seq: number;
+  entity: SyncEntity;
+  entity_id: string;
+  /** JSON text of the row as it was when the change happened. */
+  payload: string;
+  attempts: number;
+  next_attempt_at: string | null;
+}
+
+export interface PullSummary {
+  settingsChanged: boolean;
+  lockers: number;
+  calculators: number;
+  students: number;
+  penalties: number;
+  /** Rows that could not be applied (shown in the log; the rest still applies). */
+  warnings: string[];
+}
+
+/** Statuses only officers set on the dashboard (the kiosk never sets them itself). */
+const OFFICER_CALCULATOR_STATUSES: readonly string[] = [CalcStatus.MAINTENANCE, CalcStatus.MISSING, CalcStatus.DISABLED];
+
+/** Penalty status from its amounts (same rule as Supabase sync_penalty). */
+function penaltyStatus(dueCentavos: number, paidCentavos: number, waivedCentavos: number): PenaltyRecord['status'] {
+  if (dueCentavos > 0) return paidCentavos > 0 || waivedCentavos > 0 ? 'PARTIAL' : 'UNPAID';
+  return waivedCentavos > 0 ? 'WAIVED' : 'PAID';
+}
 
 const OPEN_LIST = OPEN_RENTAL_STATUSES.map((s) => `'${s}'`).join(', ');
 
@@ -303,6 +339,7 @@ export class KioskStore {
 
   setCalculatorStatus(calculatorId: string, status: CalculatorStatus, nowIso: string): void {
     this.db.prepare('UPDATE calculators SET status = ?, updated_at = ? WHERE id = ?').run(status, nowIso, calculatorId);
+    this.enqueue('calculator_state', calculatorId, { id: calculatorId, status, updated_at: nowIso });
   }
 
   getCalculatorRfidUid(calculatorId: string): string | null {
@@ -407,20 +444,26 @@ export class KioskStore {
     );
   }
 
-  private savePenalty(penalty: PenaltyRecord): PenaltyRecord {
-    const due = Math.max(0, penalty.calculated_centavos - penalty.amount_paid_centavos);
-    const status = due === 0 ? 'PAID' : penalty.amount_paid_centavos > 0 ? 'PARTIAL' : 'UNPAID';
-    const row = { ...penalty, amount_due_centavos: due, status, paid_at: due === 0 ? (penalty.paid_at ?? penalty.updated_at) : null };
+  private savePenalty(penalty: PenaltyRecord, options: { enqueue: boolean } = { enqueue: true }): PenaltyRecord {
+    const due = Math.max(0, penalty.calculated_centavos - penalty.waived_centavos - penalty.amount_paid_centavos);
+    const status = penaltyStatus(due, penalty.amount_paid_centavos, penalty.waived_centavos);
+    const row = {
+      ...penalty,
+      amount_due_centavos: due,
+      status,
+      paid_at: status === 'PAID' ? (penalty.paid_at ?? penalty.updated_at) : penalty.paid_at,
+    };
     this.db
       .prepare(
-        `INSERT INTO penalties (id, rental_id, student_id, reason, overdue_minutes, calculated_centavos, amount_paid_centavos, amount_due_centavos, status, paid_at, updated_at)
-         VALUES (@id, @rental_id, @student_id, @reason, @overdue_minutes, @calculated_centavos, @amount_paid_centavos, @amount_due_centavos, @status, @paid_at, @updated_at)
+        `INSERT INTO penalties (id, rental_id, student_id, reason, overdue_minutes, calculated_centavos, amount_paid_centavos, waived_centavos, amount_due_centavos, status, paid_at, updated_at)
+         VALUES (@id, @rental_id, @student_id, @reason, @overdue_minutes, @calculated_centavos, @amount_paid_centavos, @waived_centavos, @amount_due_centavos, @status, @paid_at, @updated_at)
          ON CONFLICT(id) DO UPDATE SET overdue_minutes = excluded.overdue_minutes, calculated_centavos = excluded.calculated_centavos,
-           amount_paid_centavos = excluded.amount_paid_centavos, amount_due_centavos = excluded.amount_due_centavos,
-           status = excluded.status, paid_at = excluded.paid_at, updated_at = excluded.updated_at`,
+           amount_paid_centavos = excluded.amount_paid_centavos, waived_centavos = excluded.waived_centavos,
+           amount_due_centavos = excluded.amount_due_centavos, status = excluded.status, paid_at = excluded.paid_at,
+           updated_at = excluded.updated_at`,
       )
       .run(row);
-    this.enqueue('penalty', row.id, row);
+    if (options.enqueue) this.enqueue('penalty', row.id, row);
     return row as PenaltyRecord;
   }
 
@@ -443,6 +486,7 @@ export class KioskStore {
       overdue_minutes: Math.max(existing?.overdue_minutes ?? 0, quote.overdueMinutes),
       calculated_centavos: Math.max(existing?.calculated_centavos ?? 0, quote.calculatedCentavos),
       amount_paid_centavos: existing?.amount_paid_centavos ?? 0,
+      waived_centavos: existing?.waived_centavos ?? 0,
       amount_due_centavos: 0,
       status: 'UNPAID',
       paid_at: existing?.paid_at ?? null,
@@ -455,7 +499,7 @@ export class KioskStore {
     const penalty = this.db.prepare('SELECT * FROM penalties WHERE id = ?').get(penaltyId) as PenaltyRecord;
     return this.savePenalty({
       ...penalty,
-      amount_paid_centavos: Math.min(penalty.calculated_centavos, penalty.amount_paid_centavos + centavos),
+      amount_paid_centavos: Math.min(penalty.calculated_centavos - penalty.waived_centavos, penalty.amount_paid_centavos + centavos),
       updated_at: nowIso,
     });
   }
@@ -496,6 +540,248 @@ export class KioskStore {
   }
 
   pendingSyncCount(): number {
-    return (this.db.prepare('SELECT COUNT(*) AS n FROM sync_queue WHERE synced_at IS NULL').get() as { n: number }).n;
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM sync_queue WHERE synced_at IS NULL AND failed_at IS NULL').get() as { n: number }).n;
+  }
+
+  // ---------------------------------------------------------------- sync: outbox (push)
+  /**
+   * The next items to push, oldest first. Empty while the oldest item is
+   * waiting out its back-off: items are never sent out of order.
+   */
+  nextSyncBatch(limit: number, nowIso: string): OutboxItem[] {
+    const rows = this.db
+      .prepare(
+        `SELECT seq, entity, entity_id, payload, attempts, next_attempt_at FROM sync_queue
+         WHERE synced_at IS NULL AND failed_at IS NULL ORDER BY seq LIMIT ?`,
+      )
+      .all(limit) as OutboxItem[];
+    if (rows[0]?.next_attempt_at && rows[0].next_attempt_at > nowIso) return [];
+    return rows;
+  }
+
+  /** Supabase stored everything up to `throughSeq`. */
+  markSynced(throughSeq: number, nowIso: string): number {
+    return this.db
+      .prepare(`UPDATE sync_queue SET synced_at = ?, last_error = NULL WHERE seq <= ? AND synced_at IS NULL AND failed_at IS NULL`)
+      .run(nowIso, throughSeq).changes;
+  }
+
+  /**
+   * Supabase refused item `seq`: retry later (10 s, 20 s, 40 s … max 10 min).
+   * After `maxAttempts` it is set aside (failed_at) so the rest can sync.
+   */
+  markSyncFailure(seq: number, message: string, now: Date, maxAttempts: number): { attempts: number; gaveUp: boolean } {
+    const row = this.db.prepare('SELECT attempts FROM sync_queue WHERE seq = ?').get(seq) as { attempts: number } | undefined;
+    const attempts = (row?.attempts ?? 0) + 1;
+    const gaveUp = attempts >= maxAttempts;
+    const delaySeconds = Math.min(600, 10 * 2 ** (attempts - 1));
+    this.db
+      .prepare(`UPDATE sync_queue SET attempts = ?, last_error = ?, next_attempt_at = ?, failed_at = ? WHERE seq = ?`)
+      .run(
+        attempts,
+        message.slice(0, 500),
+        new Date(now.getTime() + delaySeconds * 1000).toISOString(),
+        gaveUp ? now.toISOString() : null,
+        seq,
+      );
+    return { attempts, gaveUp };
+  }
+
+  failedSyncCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM sync_queue WHERE failed_at IS NOT NULL AND synced_at IS NULL').get() as { n: number }).n;
+  }
+
+  /** Synced rows are kept a while for troubleshooting, then removed (SD card space). */
+  pruneSynced(beforeIso: string): number {
+    return this.db.prepare('DELETE FROM sync_queue WHERE synced_at IS NOT NULL AND synced_at < ?').run(beforeIso).changes;
+  }
+
+  /** Each locker's latest sensor state, for the heartbeat. */
+  lockerSensorReports(): Array<{
+    id: string;
+    lockState: LockState;
+    doorState: DoorState;
+    rfidState: RfidState;
+    detectedRfidUid: string | null;
+    lastSeenAt: string | null;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT id, lock_state AS lockState, door_state AS doorState, rfid_state AS rfidState,
+                last_detected_rfid_uid AS detectedRfidUid, last_seen_at AS lastSeenAt
+         FROM lockers ORDER BY locker_number`,
+      )
+      .all() as ReturnType<KioskStore['lockerSensorReports']>;
+  }
+
+  // ---------------------------------------------------------------- sync: officer data (pull)
+  /**
+   * Applies officer data from Supabase in one transaction. Nothing here goes
+   * back into the outbox (Supabase already has it). Ownership rules: see
+   * docs/architecture.md §3.9. A row that can't be applied is skipped and
+   * reported; it never stops the others.
+   */
+  applyPull(
+    pull: { lockers: PullLocker[]; calculators: PullCalculator[]; students: PullStudent[]; penalties: PullPenalty[] },
+    settings: SystemSettings | null,
+    nowIso: string,
+  ): PullSummary {
+    const summary: PullSummary = { settingsChanged: false, lockers: 0, calculators: 0, students: 0, penalties: 0, warnings: [] };
+    const tryRow = (label: string, fn: () => boolean) => {
+      try {
+        return this.transaction(fn); // nested = SAVEPOINT: a failure undoes only this row
+      } catch (error) {
+        summary.warnings.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
+    };
+
+    this.transaction(() => {
+      if (settings && JSON.stringify(settings) !== JSON.stringify(this.getSettings())) {
+        this.saveSettings(settings, nowIso);
+        summary.settingsChanged = true;
+      }
+
+      for (const l of pull.lockers) if (tryRow(`locker ${l.locker_number}`, () => this.applyLocker(l, nowIso))) summary.lockers++;
+
+      // Calculators of other kiosks' lockers are kept without a locker here.
+      const localLockers = new Set((this.db.prepare('SELECT id FROM lockers').all() as { id: string }[]).map((r) => r.id));
+      const lockerFor = (c: PullCalculator) => (c.locker_id && localLockers.has(c.locker_id) ? c.locker_id : null);
+      // Calculators can swap lockers or tags: free those unique columns first.
+      const free = this.db.prepare(`UPDATE calculators SET locker_id = NULL, rfid_uid = 'SYNC-' || id WHERE id = ?`);
+      for (const c of pull.calculators) {
+        const local = this.db.prepare('SELECT locker_id, rfid_uid FROM calculators WHERE id = ?').get(c.id) as
+          | { locker_id: string | null; rfid_uid: string }
+          | undefined;
+        if (local && (local.locker_id !== lockerFor(c) || local.rfid_uid !== c.rfid_uid)) free.run(c.id);
+      }
+      for (const c of pull.calculators) {
+        if (tryRow(`calculator ${c.code}`, () => this.applyCalculator(c, lockerFor(c), nowIso))) summary.calculators++;
+      }
+
+      for (const st of pull.students) if (tryRow(`student ${st.student_number}`, () => this.applyStudent(st, nowIso))) summary.students++;
+      for (const pe of pull.penalties) if (tryRow(`penalty ${pe.id}`, () => this.applyPenalty(pe, nowIso))) summary.penalties++;
+    });
+    return summary;
+  }
+
+  private hasOpenRental(column: 'locker_id' | 'calculator_id', id: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM rentals WHERE ${column} = ? AND status IN (${OPEN_LIST})`).get(id);
+  }
+
+  /** Returns true if anything changed. */
+  private applyLocker(l: PullLocker, nowIso: string): boolean {
+    const local = this.db.prepare('SELECT * FROM lockers WHERE id = ?').get(l.id) as
+      | { locker_number: number; name: string; hardware_channel: number; status: LockerStatus }
+      | undefined;
+    if (!local) {
+      const status = l.status === LockerStatusValue.MAINTENANCE ? l.status : LockerStatusValue.AVAILABLE;
+      this.db
+        .prepare(`INSERT INTO lockers (id, locker_number, name, hardware_channel, status, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(l.id, l.locker_number, l.name, l.hardware_channel, status, nowIso);
+      return true;
+    }
+    // Officer-owned status: maintenance on/off (never while a rental is using the locker).
+    let status = local.status;
+    if (!this.hasOpenRental('locker_id', l.id)) {
+      if (l.status === LockerStatusValue.MAINTENANCE) status = LockerStatusValue.MAINTENANCE;
+      else if (l.status === LockerStatusValue.AVAILABLE && local.status === LockerStatusValue.MAINTENANCE) status = LockerStatusValue.AVAILABLE;
+    }
+    if (
+      local.locker_number === l.locker_number &&
+      local.name === l.name &&
+      local.hardware_channel === l.hardware_channel &&
+      local.status === status
+    ) {
+      return false;
+    }
+    this.db
+      .prepare(`UPDATE lockers SET locker_number = ?, name = ?, hardware_channel = ?, status = ?, updated_at = ? WHERE id = ?`)
+      .run(l.locker_number, l.name, l.hardware_channel, status, nowIso, l.id);
+    return true;
+  }
+
+  private applyCalculator(c: PullCalculator, lockerId: string | null, nowIso: string): boolean {
+    const local = this.db.prepare('SELECT * FROM calculators WHERE id = ?').get(c.id) as
+      | { code: string; model: string; rfid_uid: string; locker_id: string | null; status: CalculatorStatus; condition: CalculatorCondition }
+      | undefined;
+    if (!local) {
+      this.db
+        .prepare(`INSERT INTO calculators (id, code, model, rfid_uid, locker_id, status, condition, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(c.id, c.code, c.model, c.rfid_uid, lockerId, c.status, c.condition, nowIso);
+      return true;
+    }
+    // Officer-owned statuses win unless the calculator is actually out with a student.
+    let status = local.status;
+    if (local.status !== CalcStatus.RENTED && !this.hasOpenRental('calculator_id', c.id)) {
+      if (OFFICER_CALCULATOR_STATUSES.includes(c.status)) status = c.status;
+      else if (c.status === CalcStatus.AVAILABLE && OFFICER_CALCULATOR_STATUSES.includes(local.status)) status = CalcStatus.AVAILABLE;
+    }
+    const same =
+      local.code === c.code &&
+      local.model === c.model &&
+      local.rfid_uid === c.rfid_uid &&
+      local.locker_id === lockerId &&
+      local.condition === c.condition &&
+      local.status === status;
+    if (same) return false;
+    this.db
+      .prepare(
+        `UPDATE calculators SET code = ?, model = ?, rfid_uid = ?, locker_id = ?, condition = ?, status = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(c.code, c.model, c.rfid_uid, lockerId, c.condition, status, nowIso, c.id);
+    return true;
+  }
+
+  private applyStudent(st: PullStudent, nowIso: string): boolean {
+    const local = this.db.prepare('SELECT status, blocked_reason FROM students WHERE id = ?').get(st.id) as
+      | { status: StudentStatus; blocked_reason: string | null }
+      | undefined;
+    if (local) {
+      // Only the officer-owned fields; name/course come from the student's own ID scans.
+      if (local.status === st.status && local.blocked_reason === st.blocked_reason) return false;
+      this.db
+        .prepare('UPDATE students SET status = ?, blocked_reason = ?, updated_at = ? WHERE id = ?')
+        .run(st.status, st.blocked_reason, nowIso, st.id);
+      return true;
+    }
+    if (this.findStudentByNumber(st.student_number)) throw new Error('same student number is stored here under another id');
+    this.db
+      .prepare(
+        `INSERT INTO students (id, student_number, full_name, course_program, status, blocked_reason, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(st.id, st.student_number, st.full_name, st.course_program, st.status, st.blocked_reason, nowIso, nowIso);
+    return true;
+  }
+
+  private applyPenalty(pe: PullPenalty, nowIso: string): boolean {
+    if (!this.db.prepare('SELECT 1 FROM students WHERE id = ?').get(pe.student_id)) return false; // student not on this kiosk
+    const local = this.db.prepare('SELECT * FROM penalties WHERE id = ?').get(pe.id) as PenaltyRecord | undefined;
+    const cents = (pesos: number) => Math.round(pesos * 100);
+    const calculated = Math.max(local?.calculated_centavos ?? 0, cents(pe.calculated_amount));
+    const waived = cents(pe.waived_amount); // officers own waivers
+    const paid = Math.max(0, Math.min(Math.max(local?.amount_paid_centavos ?? 0, cents(pe.amount_paid)), calculated - waived));
+    if (local && local.calculated_centavos === calculated && local.waived_centavos === waived && local.amount_paid_centavos === paid) {
+      return false;
+    }
+    this.savePenalty(
+      {
+        id: pe.id,
+        rental_id: local?.rental_id ?? (this.getRental(pe.rental_transaction_id) ? pe.rental_transaction_id : null),
+        student_id: pe.student_id,
+        reason: pe.reason,
+        overdue_minutes: Math.max(local?.overdue_minutes ?? 0, pe.overdue_minutes),
+        calculated_centavos: calculated,
+        amount_paid_centavos: paid,
+        waived_centavos: waived,
+        amount_due_centavos: 0,
+        status: 'UNPAID',
+        paid_at: local?.paid_at ?? null,
+        updated_at: nowIso,
+      },
+      { enqueue: false },
+    );
+    return true;
   }
 }

@@ -235,6 +235,51 @@ export type Database = {
           },
         ]
       }
+      device_commands: {
+        Row: {
+          command: string
+          completed_at: string | null
+          device_id: string
+          expires_at: string
+          id: string
+          payload: Json
+          reason: string | null
+          requested_at: string
+          requested_by: string | null
+          result_message: string | null
+          sent_at: string | null
+          status: string
+        }
+        Insert: {
+          command: string
+          completed_at?: string | null
+          device_id: string
+          expires_at?: string
+          id?: string
+          payload?: Json
+          reason?: string | null
+          requested_at?: string
+          requested_by?: string | null
+          result_message?: string | null
+          sent_at?: string | null
+          status?: string
+        }
+        Update: {
+          command?: string
+          completed_at?: string | null
+          device_id?: string
+          expires_at?: string
+          id?: string
+          payload?: Json
+          reason?: string | null
+          requested_at?: string
+          requested_by?: string | null
+          result_message?: string | null
+          sent_at?: string | null
+          status?: string
+        }
+        Relationships: []
+      }
       device_credentials: {
         Row: {
           created_at: string
@@ -378,6 +423,9 @@ export type Database = {
           is_enabled: boolean
           last_health: Json
           last_heartbeat_at: string | null
+          last_pull_at: string | null
+          last_sync_at: string | null
+          last_sync_error: string | null
           local_db_ok: boolean | null
           location: string | null
           name: string
@@ -397,6 +445,9 @@ export type Database = {
           is_enabled?: boolean
           last_health?: Json
           last_heartbeat_at?: string | null
+          last_pull_at?: string | null
+          last_sync_at?: string | null
+          last_sync_error?: string | null
           local_db_ok?: boolean | null
           location?: string | null
           name: string
@@ -416,6 +467,9 @@ export type Database = {
           is_enabled?: boolean
           last_health?: Json
           last_heartbeat_at?: string | null
+          last_pull_at?: string | null
+          last_sync_at?: string | null
+          last_sync_error?: string | null
           local_db_ok?: boolean | null
           location?: string | null
           name?: string
@@ -1017,6 +1071,11 @@ export type Database = {
           accepted_coin_denominations: number[]
           allow_offline_rentals: boolean
           allow_offline_returns: boolean
+          closed_dates: string[]
+          operating_days: number[]
+          operating_hours_end: string
+          operating_hours_start: string
+          pause_clock_outside_hours: boolean
           grace_period_minutes: number
           id: number
           max_concurrent_rentals_per_student: number
@@ -1039,6 +1098,11 @@ export type Database = {
           accepted_coin_denominations: number[]
           allow_offline_rentals?: boolean
           allow_offline_returns?: boolean
+          closed_dates?: string[]
+          operating_days?: number[]
+          operating_hours_end?: string
+          operating_hours_start?: string
+          pause_clock_outside_hours?: boolean
           grace_period_minutes: number
           id?: number
           max_concurrent_rentals_per_student?: number
@@ -1061,6 +1125,11 @@ export type Database = {
           accepted_coin_denominations?: number[]
           allow_offline_rentals?: boolean
           allow_offline_returns?: boolean
+          closed_dates?: string[]
+          operating_days?: number[]
+          operating_hours_end?: string
+          operating_hours_start?: string
+          pause_clock_outside_hours?: boolean
           grace_period_minutes?: number
           id?: number
           max_concurrent_rentals_per_student?: number
@@ -1202,6 +1271,81 @@ export type Database = {
           is_enabled?: boolean | null
           last_health?: Json | null
           last_heartbeat_at?: string | null
+          local_db_ok?: boolean | null
+          location?: string | null
+          name?: string | null
+          network_state?: string | null
+          notes?: string | null
+          seconds_since_heartbeat?: never
+          software_version?: string | null
+          sync_queue_count?: number | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      v_devices: {
+        Row: {
+          connection_status: string | null
+          cpu_temp_c: number | null
+          created_at: string | null
+          device_code: string | null
+          health: Database["public"]["Enums"]["device_health"] | null
+          id: string | null
+          ip_address: unknown
+          is_enabled: boolean | null
+          last_health: Json | null
+          last_heartbeat_at: string | null
+          last_pull_at: string | null
+          last_sync_at: string | null
+          last_sync_error: string | null
+          local_db_ok: boolean | null
+          location: string | null
+          name: string | null
+          network_state: string | null
+          notes: string | null
+          seconds_since_heartbeat: number | null
+          software_version: string | null
+          sync_queue_count: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          connection_status?: never
+          cpu_temp_c?: number | null
+          created_at?: string | null
+          device_code?: string | null
+          health?: Database["public"]["Enums"]["device_health"] | null
+          id?: string | null
+          ip_address?: unknown
+          is_enabled?: boolean | null
+          last_health?: Json | null
+          last_heartbeat_at?: string | null
+          last_pull_at?: string | null
+          last_sync_at?: string | null
+          last_sync_error?: string | null
+          local_db_ok?: boolean | null
+          location?: string | null
+          name?: string | null
+          network_state?: string | null
+          notes?: string | null
+          seconds_since_heartbeat?: never
+          software_version?: string | null
+          sync_queue_count?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          connection_status?: never
+          cpu_temp_c?: number | null
+          created_at?: string | null
+          device_code?: string | null
+          health?: Database["public"]["Enums"]["device_health"] | null
+          id?: string | null
+          ip_address?: unknown
+          is_enabled?: boolean | null
+          last_health?: Json | null
+          last_heartbeat_at?: string | null
+          last_pull_at?: string | null
+          last_sync_at?: string | null
+          last_sync_error?: string | null
           local_db_ok?: boolean | null
           location?: string | null
           name?: string | null
@@ -1423,6 +1567,14 @@ export type Database = {
       is_admin: { Args: never; Returns: boolean }
       is_officer: { Args: never; Returns: boolean }
       is_super_admin: { Args: never; Returns: boolean }
+      operating_minutes_between: {
+        Args: { p_from: string; p_to: string }
+        Returns: number
+      }
+      apply_kiosk_sync: {
+        Args: { p_device_id: string; p_items: Json }
+        Returns: Json
+      }
     }
     Enums: {
       actor_type: "ADMIN" | "DEVICE" | "SYSTEM"

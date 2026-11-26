@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { apiResponseSchema } from './api';
+import { LockerSensorReportSchema, SyncStatusReportSchema } from './sync';
 
 /**
  * Kiosk ↔ backend contract for device APIs (spec §19, §32).
@@ -21,6 +22,10 @@ export const HeartbeatRequestSchema = z.object({
   cpuTempC: z.number().min(-40).max(150).nullable(),
   /** Kiosk clock when sent, to detect drift (no RTC on the Pi). */
   sentAt: z.iso.datetime(),
+  /** Phase 12: live sensor state of each locker (not queued: only the latest matters). */
+  lockers: z.array(LockerSensorReportSchema).max(16).optional(),
+  /** Phase 12: outbox health, shown on the Devices page. */
+  sync: SyncStatusReportSchema.optional(),
 });
 export type HeartbeatRequest = z.infer<typeof HeartbeatRequestSchema>;
 

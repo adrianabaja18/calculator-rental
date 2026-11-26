@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { ErrorCode } from '@calc-rental/shared';
 import { LCD, LCD_COLUMNS, errorScreen, lockerStatusLine, screen } from './lcd';
 
+const TUE_10AM = new Date('2026-10-20T02:00:00.000Z'); // Tuesday 10:00 AM Manila
+
 const fits = (s: readonly [string, string]) => s.every((line) => line.length === LCD_COLUMNS && /^[\x20-\x7E]*$/.test(line));
 
 describe('16x2 LCD screens', () => {
@@ -25,8 +27,15 @@ describe('16x2 LCD screens', () => {
     expect(LCD.quote('JUAN DELA CRUZ', 2000, 180)).toEqual(screen('JUAN DELA CRUZ', 'P20 / 3 HOURS'));
     expect(LCD.payment(500, 2000)).toEqual(screen('PAYMENT P5/P20', 'INSERT COINS'));
     expect(LCD.lockerOpen(1)).toEqual(screen('LOCKER 1 OPEN', 'TAKE CALCULATOR'));
-    expect(LCD.rentalSuccess('2026-10-20T05:00:00.000Z')).toEqual(screen('RENTAL SUCCESS', 'DUE AT 01:00 PM'));
-    expect(LCD.rentalSuccess('2026-10-20T04:00:00.000Z')[1].trimEnd()).toBe('DUE AT 12:00 PM'); // longest time still fits
+    expect(LCD.rentalSuccess('2026-10-20T05:00:00.000Z', TUE_10AM)).toEqual(screen('RENTAL SUCCESS', 'DUE AT 01:00 PM'));
+    expect(LCD.rentalSuccess('2026-10-20T04:00:00.000Z', TUE_10AM)[1].trimEnd()).toBe('DUE AT 12:00 PM'); // longest time still fits
+    // Operating hours: rented Tue 3 PM → due Wed 10 AM; the weekday is shown.
+    expect(LCD.rentalSuccess('2026-10-21T02:00:00.000Z', new Date('2026-10-20T07:00:00.000Z'))).toEqual(
+      screen('RENTAL SUCCESS', 'DUE WED 10:00 AM'),
+    );
+    expect(LCD.closedIdle(new Date('2026-10-26T01:00:00.000Z'))).toEqual(screen('RETURNS ONLY', 'OPEN MON 9:00AM'));
+    expect(LCD.closedForBorrowing(new Date('2026-10-21T01:00:00.000Z'))).toEqual(screen('KIOSK CLOSED', 'OPEN WED 9:00AM'));
+    expect(LCD.closedIdle(new Date('2026-10-21T02:30:00.000Z'))[1]).toBe('OPEN WED 10:30AM'); // longest still fits
     expect(LCD.penaltyDue(60, 1000)).toEqual(screen('LATE 1H00M', 'PAY PENALTY P10'));
     expect(LCD.returnTo('CALC-002', 2)).toEqual(screen('RETURN CALC #2', 'TO LOCKER 2'));
     expect(LCD.wrongCalculator('CALC-002')).toEqual(screen('WRONG CALCULATOR', 'RETURN CALC #2'));
@@ -46,7 +55,7 @@ describe('16x2 LCD screens', () => {
       LCD.quote('MARIA CLARA DE LOS SANTOS', 2000, 180),
       LCD.payment(2000, 2000),
       LCD.lockerOpen(12),
-      LCD.rentalSuccess('2026-10-20T04:00:00.000Z'),
+      LCD.rentalSuccess('2026-10-20T04:00:00.000Z', TUE_10AM),
       LCD.penaltyDue(24 * 60 + 5, 16000),
       LCD.returnTo('CALC-010', 10),
       LCD.wrongCalculator('CALC-010'),

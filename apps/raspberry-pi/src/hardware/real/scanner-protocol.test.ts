@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ScannerDecoder } from './scanner-protocol';
+import { ScannerDecoder, scannerCommand } from './scanner-protocol';
 
 // Fake identity only. JSON escapes the TABs of the school-ID format as \t.
 const JUAN_LINE = '{"type":"qr","seq":1,"data":"JUAN DELA CRUZ\\t2022100001\\tBSCpE"}';
@@ -51,6 +51,18 @@ describe('ScannerDecoder', () => {
     expect(decoder.firmwareVersion).toBe('1.0.0');
     expect(decoder.lastHeardAt).toBe(42);
     expect(scans).toEqual([]);
+  });
+
+  it('power saving (firmware 1.1.0): tracks whether the camera sleeps; commands are one JSON line', () => {
+    const { decoder } = setup();
+    expect(decoder.cameraState).toBeNull(); // firmware 1.0.0 never says
+    expect(decoder.feed('{"type":"state","state":"sleeping"}')).toBe('status');
+    expect(decoder.cameraState).toBe('sleeping');
+    decoder.feed('{"type":"hello","fw":"1.1.0","state":"awake"}'); // a reboot always starts awake
+    expect(decoder.cameraState).toBe('awake');
+    expect(decoder.feed('{"type":"error","message":"camera restart failed"}')).toBe('status');
+    expect(scannerCommand('sleep')).toBe('{"cmd":"sleep"}\n');
+    expect(scannerCommand('wake')).toBe('{"cmd":"wake"}\n');
   });
 
   it.each([

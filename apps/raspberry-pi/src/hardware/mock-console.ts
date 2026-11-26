@@ -1,6 +1,6 @@
 import readline from 'node:readline';
 import { DoorState } from '@calc-rental/shared';
-import { DEV_RFID } from '../db/dev-seed';
+import { DEV_RFID, DEV_STUDENT_QR } from '../db/dev-seed';
 import type { KioskStore } from '../db/kiosk-store';
 import type { KioskController } from '../kiosk/kiosk-controller';
 import type { LcdScreen } from '../kiosk/lcd';
@@ -9,16 +9,10 @@ import type { MockHardware } from './mock';
 /**
  * Keyboard control for the kiosk in HARDWARE_MODE=mock (development only).
  * Lets the team play the student and the sensors before any wiring exists.
- * Phase 14 replaces this with the full simulator.
+ * For a clickable version in the browser, use the simulator: npm run sim:pi
  */
 
-const STUDENTS: Record<string, string> = {
-  juan: 'JUAN DELA CRUZ\t2022100001\tBSCpE',
-  maria: 'MARIA SANTOS\t2023100002\tBSCE',
-  pedro: 'PEDRO REYES\t2024100003\tBSIT',
-  ana: 'ANA GARCIA\t2022100004\tBSCpE', // blocked
-  carlo: 'CARLO MENDOZA\t2025100005\tBSEE',
-};
+const STUDENTS: Record<string, string> = DEV_STUDENT_QR;
 const CALC_UIDS: Record<string, string> = { '1': DEV_RFID.calc1, '2': DEV_RFID.calc2 };
 
 const HELP = `

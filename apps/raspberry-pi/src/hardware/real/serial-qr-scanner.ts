@@ -1,7 +1,7 @@
 import type { SerialPortStream } from '@serialport/stream';
 import { ReadlineParser, SerialPort } from 'serialport';
 import type { QRScanner } from '../types';
-import { SCANNER_BAUD_RATE, ScannerDecoder } from './scanner-protocol';
+import { SCANNER_BAUD_RATE, ScannerDecoder, scannerCommand } from './scanner-protocol';
 
 /**
  * Real QR scanner: the ESP32-CAM on its USB-C programmer board (CH340),
@@ -15,7 +15,15 @@ import { SCANNER_BAUD_RATE, ScannerDecoder } from './scanner-protocol';
  */
 export class SerialQRScanner implements QRScanner {
   private handler: ((raw: string) => void) | null = null;
-  private readonly decoder = new ScannerDecoder((raw) => this.handler?.(raw));
+  private readonly decoder = new ScannerDecoder((raw) => this.handler?.(raw), {
+    onStatus: (message) => {
+      // The ESP32 rebooted (it starts awake) while the kiosk wants it asleep: say so again.
+      if (message.type === 'hello' && !this.active) this.send('sleep');
+      if (message.type === 'error') this.log('warn', `QR scanner: ${message.message}`);
+    },
+  });
+  /** What the kiosk wants: camera on (true) or asleep for power saving (false). */
+  private active = true;
   private port: SerialPortStream | null = null;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
@@ -41,7 +49,18 @@ export class SerialQRScanner implements QRScanner {
       connected: this.connected,
       lastHeardAt: this.decoder.lastHeardAt,
       firmwareVersion: this.decoder.firmwareVersion,
+      cameraState: this.decoder.cameraState,
     };
+  }
+
+  /** Power management: camera off while the kiosk sleeps (firmware ≥ 1.1.0). */
+  async setActive(active: boolean): Promise<void> {
+    this.active = active;
+    this.send(active ? 'wake' : 'sleep');
+  }
+
+  private send(cmd: 'sleep' | 'wake') {
+    if (this.port?.isOpen) this.port.write(scannerCommand(cmd));
   }
 
   start() {
@@ -54,6 +73,7 @@ export class SerialQRScanner implements QRScanner {
       this.warnedUnavailable = false;
       port.set({ dtr: false, rts: false }, () => {});
       this.log('info', 'QR scanner connected', { port: this.path });
+      if (!this.active) this.send('sleep'); // reconnected while the kiosk sleeps
     });
     port.on('close', () => this.reconnect('closed'));
     port.on('error', (error) => this.log('warn', 'QR scanner serial error', { port: this.path, error: error.message }));

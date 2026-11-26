@@ -23,6 +23,15 @@ export const DEV_IDS = {
 
 export const DEV_RFID = { calc1: '04-A1-B2-C3-D4', calc2: '04-E5-F6-A7-B8' } as const;
 
+/** School ID QR payloads of the fake students (NAME<TAB>NUMBER<TAB>COURSE). ana is blocked. */
+export const DEV_STUDENT_QR = {
+  juan: 'JUAN DELA CRUZ\t2022100001\tBSCpE',
+  maria: 'MARIA SANTOS\t2023100002\tBSCE',
+  pedro: 'PEDRO REYES\t2024100003\tBSIT',
+  ana: 'ANA GARCIA\t2022100004\tBSCpE',
+  carlo: 'CARLO MENDOZA\t2025100005\tBSEE',
+} as const;
+
 /** Team pricing: ₱20 / 3 h (2026-11-17); ₱10 per started 1.5 h overdue, 10-min grace (2026-11-18). */
 export const DEV_SETTINGS: SystemSettings = {
   rentalFee: 20,
@@ -42,6 +51,12 @@ export const DEV_SETTINGS: SystemSettings = {
   returnTimeoutSeconds: 90,
   allowOfflineReturns: true,
   allowOfflineRentals: false,
+  // Team decision 2026-11-27: open Mon–Fri 9–5; rental and late time count only then.
+  operatingHoursStart: '09:00',
+  operatingHoursEnd: '17:00',
+  operatingDays: [1, 2, 3, 4, 5],
+  closedDates: [],
+  pauseClockOutsideHours: true,
 };
 
 /**

@@ -28,6 +28,7 @@ const pythonAvailable = (() => {
   }
 })();
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const TUESDAY_10AM = new Date('2026-10-20T02:00:00.000Z'); // Manila time
 
 let bridge: BridgeClient | null = null;
 afterEach(() => bridge?.stop());
@@ -42,7 +43,7 @@ async function startBridge() {
 describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
   it('starts and reports its devices', async () => {
     const { ready } = await startBridge();
-    expect(ready).toMatchObject({ type: 'ready', mode: 'mock', version: '1.2.0' });
+    expect(ready).toMatchObject({ type: 'ready', mode: 'mock', version: '1.3.0' });
   });
 
   it('holds a relay, locks it early, and refuses unsafe hold times', async () => {
@@ -85,6 +86,14 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
     expect(presses).toEqual(['select2', 'close1']);
   });
 
+  it('power saving: LCD backlight and RFID readers can be switched off and on', async () => {
+    const { bridge } = await startBridge();
+    await expect(new BridgeDisplay(bridge).setBacklight(false)).resolves.toBeUndefined();
+    await expect(bridge.request('backlight', { on: true })).resolves.toMatchObject({ type: 'ok' });
+    await expect(bridge.request('rfid_power', { on: false })).resolves.toMatchObject({ type: 'ok' });
+    await expect(new BridgeRFIDReader(bridge).setPower(true)).resolves.toBeUndefined();
+  });
+
   it('updates the LCD and beeps', async () => {
     const { bridge } = await startBridge();
     await expect(new BridgeDisplay(bridge).show(['SYSTEM READY    ', 'SCAN STUDENT ID '])).resolves.toBeUndefined();
@@ -108,9 +117,10 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
     await bridge.request('mock_tag', { channel: 2, uid: DEV_RFID.calc2 });
 
     const mock = createMockHardware();
-    const rentals = new RentalService(store, { deviceCode: 'DEVICE-CALC-KIOSK-001' });
-    const payments = new PaymentService(store, rentals);
-    const returns = new ReturnService(store, payments);
+    const now = () => TUESDAY_10AM;
+    const rentals = new RentalService(store, { deviceCode: 'DEVICE-CALC-KIOSK-001', now });
+    const payments = new PaymentService(store, rentals, { now });
+    const returns = new ReturnService(store, payments, { now });
     const kiosk = new KioskController(
       store,
       {
@@ -124,7 +134,7 @@ describe.skipIf(!pythonAvailable)('Python hardware bridge (mock mode)', () => {
         buzzer: new BridgeBuzzer(bridge),
       },
       { rentals, payments, returns },
-      { messageMs: 200 },
+      { messageMs: 200, now }, // inside operating hours whatever time the test runs
     );
     await kiosk.start();
     await kiosk.handleScan('JUAN DELA CRUZ\t2022100001\tBSCpE');

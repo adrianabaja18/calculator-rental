@@ -348,6 +348,8 @@ describe('audit log', () => {
 describe('views', () => {
   it('v_rentals reports OVERDUE as soon as due_at has passed (no job needed)', () =>
     isolated(async () => {
+      // Count every minute here (this test runs at any time of day); operating hours: next test.
+      await db.query(`update public.system_settings set pause_clock_outside_hours = false where id = 1`);
       await db.query(
         `insert into public.rental_transactions (
            student_id, calculator_id, locker_id, status, rental_fee, amount_paid, rental_duration_minutes,
@@ -361,6 +363,19 @@ describe('views', () => {
       );
       expect(rows[0]).toMatchObject({ status: 'ACTIVE', effective_status: 'OVERDUE' });
       expect(rows[0]!.overdue_minutes_now).toBeGreaterThanOrEqual(29);
+    }));
+
+  it('operating_minutes_between counts only Mon–Fri 9–5 Manila time, minus closed dates (same rule as the kiosk)', () =>
+    isolated(async () => {
+      await db.query(`update public.system_settings set closed_dates = '{2026-12-25}' where id = 1`);
+      const minutes = async (from: string, to: string) =>
+        (await db.query<{ m: number }>(`select public.operating_minutes_between($1::timestamptz, $2::timestamptz) as m`, [from, to])).rows[0]!.m;
+      expect(await minutes('2026-10-20 16:00+08', '2026-10-21 10:00+08')).toBe(120); // 4–5 PM + 9–10 AM
+      expect(await minutes('2026-10-23 16:00+08', '2026-10-26 09:30+08')).toBe(90); // weekend free
+      expect(await minutes('2026-12-24 16:00+08', '2026-12-28 09:00+08')).toBe(60); // Christmas closed
+      expect(await minutes('2026-10-20 16:00+08', '2026-10-20 19:00+08')).toBe(60); // after closing
+      await db.query(`update public.system_settings set pause_clock_outside_hours = false where id = 1`);
+      expect(await minutes('2026-10-20 16:00+08', '2026-10-21 10:00+08')).toBe(18 * 60);
     }));
 
   it('v_lockers only marks a locker assignable when the RFID reader sees the expected tag', () =>

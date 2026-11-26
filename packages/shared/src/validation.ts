@@ -113,6 +113,9 @@ export const PenaltyStepSchema = z.object({
 });
 export type PenaltyStep = z.infer<typeof PenaltyStepSchema>;
 
+/** "09:00" … "23:59" (24-hour, Philippine time). */
+const HourMinuteSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Use HH:MM, e.g. 09:00' });
+
 export const SystemSettingsSchema = z
   .object({
     rentalFee: MoneySchema.refine((v) => Number.isInteger(v) && v > 0, {
@@ -141,8 +144,27 @@ export const SystemSettingsSchema = z
     returnTimeoutSeconds: z.number().int().min(15).max(300),
     allowOfflineReturns: z.boolean(),
     allowOfflineRentals: z.boolean(),
+    // Operating hours (2026-11-27). Defaults keep settings saved before then valid.
+    operatingHoursStart: HourMinuteSchema.default('09:00'),
+    operatingHoursEnd: HourMinuteSchema.default('17:00'),
+    /** ISO weekdays: 1 = Monday … 7 = Sunday. */
+    operatingDays: z
+      .array(z.number().int().min(1).max(7))
+      .min(1, { message: 'Open on at least one day' })
+      .refine((days) => new Set(days).size === days.length, { message: 'Duplicate days' })
+      .default([1, 2, 3, 4, 5]),
+    /** 'YYYY-MM-DD' holidays / class suspensions (closed all day). */
+    closedDates: z
+      .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Dates must look like 2026-12-25' }))
+      .max(366)
+      .default([]),
+    /** Rental and late time count only during operating hours. */
+    pauseClockOutsideHours: z.boolean().default(true),
   })
   .superRefine((s, ctx) => {
+    if (s.operatingHoursEnd <= s.operatingHoursStart) {
+      ctx.addIssue({ code: 'custom', path: ['operatingHoursEnd'], message: 'Closing time must be after opening time' });
+    }
     if (s.penaltyType === PenaltyType.STEPPED) {
       if (s.penaltySteps.length === 0) {
         ctx.addIssue({ code: 'custom', path: ['penaltySteps'], message: 'Stepped penalties need at least one tier' });
