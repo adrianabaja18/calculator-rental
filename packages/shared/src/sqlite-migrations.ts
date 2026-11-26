@@ -357,7 +357,7 @@ export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = [
     sql: `
       -- Phone ID scanning (replaces the ESP32-CAM). The kiosk shows a 6-digit
       -- code; the student's phone sends the ID text to the Pi's /scan page;
-      -- the kiosk takes it once. The text is deleted as soon as it is taken.
+      -- the kiosk takes it once. Every sent ID text is kept here as a record.
       CREATE TABLE scan_sessions (
         id           TEXT PRIMARY KEY NOT NULL,
         code         TEXT NOT NULL CHECK (length(code) = 6 AND code NOT GLOB '*[^0-9]*'),

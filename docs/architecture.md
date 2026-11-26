@@ -179,11 +179,11 @@ The kiosk must keep working 24/7 even if the internet drops, so the **Pi's SQLit
 The kiosk has no camera. Because the web app runs **on the Pi** with the same SQLite file as the kiosk (local-first, see [raspberry-pi-local-setup.md](raspberry-pi-local-setup.md)), identification needs **no internet**, only the kiosk's LAN or Wi-Fi hotspot:
 1. **Kiosk** (any button at idle) → `startScanSession()` writes a random 6-digit code to `scan_sessions` (SQLite migration 7), valid 2 min. The LCD shows it with a countdown. A new code ends the previous one.
 2. **Phone** → `http://<pi-ip>:3000/scan` (public page, no login; opened from a printed sticker). The QR is decoded **on the phone** (BarcodeDetector, else jsQR with several sizes, a centre crop and a contrast boost). `POST /api/scan {code, qr}` → the web app parses the QR again (Rule 14) and calls `submitScan()`.
-3. **Kiosk** checks every 0.5 s with `takeScan()`, which hands the text over **once** and deletes it; the kiosk then runs the normal borrow/return flow.
+3. **Kiosk** checks every 0.5 s with `takeScan()`, which hands the text over **once** (the row keeps it as a record of the scan); the kiosk then runs the normal borrow/return flow.
 
 All three functions live in `packages/shared/src/sqlite-node.ts`, so the kiosk and the web app use the same rules.
 
-Security: the code proves physical presence (only the LCD shows it); it is single-use and short-lived. Wrong codes are counted per phone (SHA-256 of its address with a per-Pi random salt; no addresses stored): 10 in 10 minutes → refused. The photo never leaves the phone. The online (cloud) dashboard refuses `/api/scan`: scanning only happens on the Pi.
+Security: the code proves physical presence (only the LCD shows it); it is single-use and short-lived. Wrong codes are counted per phone (SHA-256 of its address with a per-Pi random salt; no addresses stored): 10 in 10 minutes → refused. The photo never leaves the phone; the QR text is **stored** in `scan_sessions` (team decision 2026-11-28) with when it was sent and whether the kiosk used it. The online (cloud) dashboard refuses `/api/scan`: scanning only happens on the Pi.
 
 Limit: phones only allow the **live** camera view on https. Over the Pi's plain `http://` address, **Take or upload a photo** works (it opens the phone's own camera app).
 

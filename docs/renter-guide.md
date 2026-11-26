@@ -62,7 +62,7 @@ Source text for the kiosk brochure/pamphlet. It matches what the kiosk actually 
 - Use good light. In a dim room tap **Light on** (on phones that have it).
 - Bring the phone close so the QR fills the frame, hold it steady, and avoid glare from the ID's plastic.
 - Wipe a dirty ID first. If the live camera struggles, a sharp photo usually works.
-- Your photo stays on your phone. Only the text in the QR (name, student number, course) is sent.
+- Your photo stays on your phone. Only the text in the QR (name, student number, course) is sent, and the kiosk keeps it as a record.
 
 ---
 

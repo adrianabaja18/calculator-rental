@@ -147,7 +147,7 @@ export function ScanClient() {
       </button>
 
       <p className="mt-6 text-center text-xs text-slate-500">
-        Your photo stays on your phone. Only the text in the QR (name, student number, course) is sent.
+        Your photo stays on your phone. Only the text in the QR (name, student number, course) is sent, and the kiosk keeps it as a record of your rental.
       </p>
     </>
   );

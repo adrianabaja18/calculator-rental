@@ -23,7 +23,7 @@ const send = (code: string, client = 'phone-a', at = later(5)) => submitScan(db,
 const wrongCode = (code: string) => (code === '999999' ? '111111' : '999999');
 
 describe('phone scan sessions (local SQLite)', () => {
-  it('hands the ID text to the kiosk exactly once, then deletes it', () => {
+  it('hands the ID text to the kiosk exactly once, and keeps it on record', () => {
     const s = startScanSession(db, T0);
     expect(s.code).toMatch(/^[0-9]{6}$/);
     expect(takeScan(db, s.id, later(1))).toEqual({ status: 'WAITING', qr: null });
@@ -31,13 +31,21 @@ describe('phone scan sessions (local SQLite)', () => {
     expect(send(s.code)).toBe('BAD_CODE'); // single use
     expect(takeScan(db, s.id, later(6))).toEqual({ status: 'SUBMITTED', qr: QR });
     expect(takeScan(db, s.id, later(7))).toEqual({ status: 'CONSUMED', qr: null });
-    expect(db.prepare('SELECT qr_payload FROM scan_sessions WHERE id = ?').get(s.id)).toEqual({ qr_payload: null });
+    expect(db.prepare('SELECT status, qr_payload FROM scan_sessions WHERE id = ?').get(s.id)).toEqual({ status: 'CONSUMED', qr_payload: QR });
   });
 
   it('codes expire after 2 minutes', () => {
     const s = startScanSession(db, T0);
     expect(send(s.code, 'phone-a', later(121))).toBe('BAD_CODE');
     expect(takeScan(db, s.id, later(121)).status).toBe('EXPIRED');
+  });
+
+  it('keeps every sent ID, even when the kiosk never took it', () => {
+    const first = startScanSession(db, T0);
+    expect(send(first.code)).toBe('OK');
+    startScanSession(db, later(30)); // kiosk moved on (e.g. restarted) before reading it
+    expect(db.prepare('SELECT status, qr_payload FROM scan_sessions WHERE id = ?').get(first.id)).toEqual({ status: 'EXPIRED', qr_payload: QR });
+    expect(db.prepare(`SELECT count(*) AS n FROM scan_sessions WHERE qr_payload IS NOT NULL`).get()).toEqual({ n: 1 });
   });
 
   it('a new code ends the previous one', () => {

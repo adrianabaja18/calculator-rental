@@ -183,7 +183,7 @@ kiosk checks SQLite every 0.5 s ─▶ gets the ID text once ─▶ the normal b
 - **No internet needed:** the web app and the kiosk share the Pi's SQLite file. Phones only need to be on the kiosk's network (school Wi-Fi or the Pi's hotspot).
 - The **code** proves the student is at the kiosk (it's only on the LCD). Codes are random, single-use, and expire after 2 minutes. A new code ends the previous one.
 - **Guessing is blocked:** 10 wrong codes in 10 minutes from one phone → "Too many wrong codes" for a while. Phones are counted by a salted hash of their address; no addresses are stored.
-- **Privacy:** the photo never leaves the phone. Only the QR text goes to the Pi, and it's **deleted** as soon as the kiosk has taken it.
+- **Stored:** every ID sent from a phone is **kept** in the Pi's SQLite (`scan_sessions.qr_payload`, with the time it was sent and whether the kiosk used it). The photo itself never leaves the phone; only the QR text is sent.
 - **Decoding:** the browser's own QR detector when it has one (Android Chrome), otherwise jsQR tried at several sizes, on the centre of the photo, and with a contrast boost for dim or faded IDs. A test photo with a small, faded QR in a dim, noisy 3000×2000 picture decoded fine.
 
 ### What was built

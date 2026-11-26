@@ -368,8 +368,7 @@ export type ScanSessionStatus = 'WAITING' | 'SUBMITTED' | 'CONSUMED' | 'EXPIRED'
 /** Kiosk: a fresh random code. Any older open session ends (one kiosk per Pi). */
 export function startScanSession(db: LocalDatabase, now: Date): { id: string; code: string; expiresAt: string } {
   return db.transaction(() => {
-    db.prepare(`UPDATE scan_sessions SET status = 'EXPIRED', qr_payload = NULL WHERE status IN ('WAITING', 'SUBMITTED')`).run();
-    db.prepare(`DELETE FROM scan_sessions WHERE created_at < ?`).run(new Date(now.getTime() - 86_400_000).toISOString());
+    db.prepare(`UPDATE scan_sessions SET status = 'EXPIRED' WHERE status IN ('WAITING', 'SUBMITTED')`).run();
     const id = randomUUID();
     const code = String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, '0');
     const expiresAt = new Date(now.getTime() + SCAN_SESSION_SECONDS * 1000).toISOString();
@@ -406,7 +405,7 @@ export function submitScan(
   })();
 }
 
-/** Kiosk: has the phone sent the ID? The text is handed over ONCE, then deleted. */
+/** Kiosk: has the phone sent the ID? The text is handed over ONCE; the row keeps it as a record. */
 export function takeScan(db: LocalDatabase, id: string, now: Date): { status: ScanSessionStatus; qr: string | null } {
   return db.transaction(() => {
     const row = db.prepare(`SELECT status, qr_payload, expires_at FROM scan_sessions WHERE id = ?`).get(id) as
@@ -418,7 +417,7 @@ export function takeScan(db: LocalDatabase, id: string, now: Date): { status: Sc
       return { status: 'EXPIRED' as const, qr: null };
     }
     if (row.status === 'SUBMITTED') {
-      db.prepare(`UPDATE scan_sessions SET status = 'CONSUMED', consumed_at = ?, qr_payload = NULL WHERE id = ?`).run(now.toISOString(), id);
+      db.prepare(`UPDATE scan_sessions SET status = 'CONSUMED', consumed_at = ? WHERE id = ?`).run(now.toISOString(), id);
       return { status: 'SUBMITTED' as const, qr: row.qr_payload };
     }
     return { status: row.status, qr: null };
