@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DoorState, RentalStatus } from '@calc-rental/shared';
 import { startScanSession, submitScan, takeScan } from '@calc-rental/shared/sqlite';
 import { DEV_IDS, DEV_RFID, DEV_SETTINGS, seedDevData } from '../db/dev-seed';
@@ -55,14 +55,14 @@ async function boot(options: { clockSynced?: boolean; sleepAfterMs?: number; pho
   await kiosk.start(); // no tick: the first scan must already see the calculators
 }
 
-/** Full borrow by Juan: scan → blue 1 → P20 → take calculator → red 1. */
-async function borrow() {
+/** Full borrow by Juan: scan → blue → P20 → take calculator → red. */
+async function borrow(channel = 1) {
   await kiosk.handleScan(JUAN);
-  await blue(1);
+  await blue(channel);
   await coin(20);
-  hw.rfid.place(1, null);
+  hw.rfid.place(channel, null);
   await advance(SECOND);
-  await red(1);
+  await red(channel);
   const rentalId = (store.db.prepare(`SELECT id FROM rentals WHERE status = 'ACTIVE'`).get() as { id: string }).id;
   await advance(3 * SECOND); // success message times out
   return rentalId;
@@ -309,6 +309,32 @@ describe('10-second lock window (no door latch)', () => {
 });
 
 describe('returning (spec §6, red button)', () => {
+  it.each([
+    { channel: 1, uid: DEV_RFID.calc1, rented: '1:N/A 2:READY' },
+    { channel: 2, uid: DEV_RFID.calc2, rented: '1:READY 2:N/A' },
+  ])('shows both lockers ready after returning to locker $channel despite one missed read per reader', async ({ channel, uid, rented }) => {
+    const rentalId = await borrow(channel);
+    expect(lcd()).toEqual(['SCAN STUDENT ID', rented]);
+
+    await kiosk.handleScan(JUAN);
+    hw.rfid.place(channel, uid);
+    await red(channel);
+    expect(store.getRental(rentalId)?.status).toBe(RentalStatus.COMPLETED);
+
+    const read = hw.rfid.read.bind(hw.rfid);
+    const missedChannels = new Set([1, 2]);
+    const readings = vi.spyOn(hw.rfid, 'read').mockImplementation(async (channel) =>
+      missedChannels.delete(channel) ? { uid: null, readerOk: true } : read(channel),
+    );
+    await advance(3 * SECOND);
+    expect(lcd()).toEqual(['SCAN STUDENT ID', '1:READY 2:READY']);
+    readings.mockRestore();
+
+    await kiosk.handleScan(JUAN);
+    await blue(channel);
+    expect(kiosk.state).toBe(KioskState.WAITING_FOR_PAYMENT);
+  });
+
   it('on time: opens only the borrowed locker, then completes on the red button', async () => {
     const rentalId = await borrow();
     hw.lockers.unlocks.length = 0;

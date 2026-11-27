@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   DoorState,
   ErrorCode,
@@ -123,6 +124,8 @@ const LOCK_STATES: ReadonlySet<KioskState> = new Set([
 
 /** Calculator out (or back in): shut the door while the lock is still powered, then RED. */
 const doneScreen = (secondsLeft: number) => (secondsLeft ? LCD.lockOpen('CLOSE THE DOOR', secondsLeft) : LCD.lockClosed('CLOSED? PUSH RED'));
+
+const RFID_RETRY_DELAY_MS = 75;
 
 interface SensorSnapshot {
   rfidState: RfidState;
@@ -493,9 +496,13 @@ export class KioskController {
     if (this.state === KioskState.WAITING_FOR_RETURN) {
       const reading = await this.hw.rfid.read(flow.channel);
       const door = await this.hw.lockers.doorState(flow.channel);
-      const result = this.services.returns.verifyReturn(flow.rentalId, { detectedRfidUid: reading.uid, doorState: door });
+      const result = this.services.returns.verifyReturn(flow.rentalId, {
+        detectedRfidUid: reading.readerOk ? reading.uid : null,
+        doorState: door,
+      });
       if (result.ok) {
         await this.lockNow(flow, now);
+        this.recordSensors(flow.lockerId, { rfidState: RfidState.EXPECTED_TAG, uid: reading.uid, door }, this.now().getTime());
         this.move(KioskState.RETURN_COMPLETE);
         this.holdUntil = now + this.messageMs;
         await this.hw.buzzer.beep('ok');
@@ -655,6 +662,8 @@ export class KioskController {
         // return (the student would keep being charged): complete it and tell an officer.
         const result = this.services.returns.verifyReturn(flow.rentalId, { detectedRfidUid: reading.uid, doorState: DoorState.UNKNOWN });
         if (result.ok) {
+          const door = this.sensors.get(flow.lockerId)?.door ?? DoorState.UNKNOWN;
+          this.recordSensors(flow.lockerId, { rfidState: RfidState.EXPECTED_TAG, uid: reading.uid, door }, now);
           this.log('warn', 'Red button not pressed after a return; completed at the timeout', { rentalId: flow.rentalId, locker: flow.lockerNumber });
           this.move(KioskState.RETURN_COMPLETE);
           this.holdUntil = now + this.messageMs;
@@ -683,7 +692,12 @@ export class KioskController {
    */
   private async pollSensors(now: number) {
     for (const locker of this.store.listLockerHardware()) {
-      const reading = await this.hw.rfid.read(locker.channel);
+      let reading = await this.hw.rfid.read(locker.channel);
+      // Confirm an empty read before invalidating a tag we just verified.
+      if (reading.readerOk && reading.uid === null && this.sensors.get(locker.id)?.rfidState === RfidState.EXPECTED_TAG) {
+        await delay(RFID_RETRY_DELAY_MS);
+        reading = await this.hw.rfid.read(locker.channel);
+      }
       const rfidState = !reading.readerOk
         ? RfidState.UNKNOWN
         : reading.uid === null
@@ -692,16 +706,22 @@ export class KioskController {
             ? RfidState.EXPECTED_TAG
             : RfidState.WRONG_TAG;
       const door = await this.hw.lockers.doorState(locker.channel);
-      const previous = this.sensors.get(locker.id);
-      const changed = !previous || previous.rfidState !== rfidState || previous.uid !== reading.uid || previous.door !== door;
-      if (!changed && now - previous.writtenAt < this.sensorWriteIntervalMs) continue;
-      this.store.setLockerSensors(
-        locker.id,
-        { rfidState, detectedRfidUid: reading.uid, lockState: LockState.LOCKED, doorState: door },
-        new Date(now).toISOString(),
-      );
-      this.sensors.set(locker.id, { rfidState, uid: reading.uid, door, writtenAt: now });
+      this.recordSensors(locker.id, { rfidState, uid: reading.uid, door }, now);
     }
+  }
+
+  private recordSensors(lockerId: string, snapshot: Omit<SensorSnapshot, 'writtenAt'>, now: number) {
+    const { rfidState, uid, door } = snapshot;
+    const previous = this.sensors.get(lockerId);
+    const changed = !previous || previous.rfidState !== rfidState || previous.uid !== uid || previous.door !== door;
+    if (!changed && now - previous.writtenAt < this.sensorWriteIntervalMs) return;
+
+    this.store.setLockerSensors(
+      lockerId,
+      { rfidState, detectedRfidUid: uid, lockState: LockState.LOCKED, doorState: door },
+      new Date(now).toISOString(),
+    );
+    this.sensors.set(lockerId, { ...snapshot, writtenAt: now });
   }
 
   // ------------------------------------------------------------------ helpers
